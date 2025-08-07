@@ -168,7 +168,8 @@ const App: React.FC = () => {
       // Si la constante está vacía, asumimos desarrollo local.
       if (!PEER_SERVER_HOST) {
           console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
-          return id ? new Peer(id) : new Peer();
+          if (id) return new Peer(id);
+          return new Peer();
       }
 
       const peerConfig = {
@@ -183,7 +184,8 @@ const App: React.FC = () => {
           }
       };
       
-      return id ? new Peer(id, peerConfig) : new Peer(peerConfig);
+      if (id) return new Peer(id, peerConfig);
+      return new Peer(peerConfig);
     };
 
     const initializePeer = () => {
@@ -237,20 +239,26 @@ const App: React.FC = () => {
     const joinGame = () => {
         if (!playerName) { setError('Por favor, introduce tu nombre.'); return; }
         if (!hostId) { setError('Por favor, introduce el ID de la partida.'); return; }
-        const stableHostId = hostId;
         setView('lobby');
         
-        const peer = getPeerConfig(undefined); // Guests don't need a specific ID
+        const peer = getPeerConfig(); // Guests don't need a specific ID
         peerRef.current = peer;
 
         peer.on('open', () => {
-            const conn = peer.connect(stableHostId);
-            if (!conn) {
-                setError(`No se pudo conectar al ID: ${stableHostId}. Verifica que sea correcto.`);
+            // By re-checking hostId inside the async callback, we satisfy
+            // TypeScript's strict null checks for variables from an outer scope.
+            if (!hostId) {
+                setError(`No se pudo conectar al ID. Verifica que sea correcto.`);
                 setView('home');
                 return;
             }
-            connectionsRef.current[stableHostId] = conn;
+            const conn = peer.connect(hostId);
+            if (!conn) {
+                setError(`No se pudo conectar al ID: ${hostId}. Verifica que sea correcto.`);
+                setView('home');
+                return;
+            }
+            connectionsRef.current[hostId] = conn;
             conn.on('open', () => conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } }));
             conn.on('data', (data: any) => {
                 const message = data as PeerMessage;
@@ -360,7 +368,6 @@ const App: React.FC = () => {
                     onDeny={handleDenyAction}
                     devPlayerViewId={devPlayerViewId}
                     onSetDevPlayerViewId={setDevPlayerViewId}
-                    addToast={addToast}
                     onNavigateToBoard={() => setView('board')}
                     setSelectedPropertyId={setSelectedPropertyId}
                     />;
@@ -488,7 +495,7 @@ const LobbyScreen = ({ hostId, players, isHost, onStartGame }: any) => (
     </Card>
 );
 
-const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHostDirectAction, pendingActions, onApprove, onDeny, devPlayerViewId, onSetDevPlayerViewId, addToast, onNavigateToBoard, setSelectedPropertyId }: any) => {
+const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHostDirectAction, pendingActions, onApprove, onDeny, devPlayerViewId, onSetDevPlayerViewId, onNavigateToBoard, setSelectedPropertyId }: any) => {
     const [isPayModalOpen, setPayModalOpen] = useState(false);
     const [isHostPanelOpen, setHostPanelOpen] = useState(false);
     

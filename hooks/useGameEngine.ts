@@ -136,7 +136,8 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         const propertyInfo = state.properties[propertyId];
         const propertyData = PROPERTIES.find(p => p.id === propertyId);
 
-        if (!player || !propertyData || typeof propertyData.price === 'undefined' || propertyInfo.ownerId !== playerId || propertyInfo.mortgaged) return state;
+        if (!player || !propertyData || propertyInfo.ownerId !== playerId || propertyInfo.mortgaged) return state;
+        if (typeof propertyData.price === 'undefined') return state; // Ensure property has a price
 
         const mortgageValue = propertyData.price / 2;
         const players = state.players.map(p => 
@@ -153,7 +154,8 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         const propertyInfo = state.properties[propertyId];
         const propertyData = PROPERTIES.find(p => p.id === propertyId);
 
-        if (!player || !propertyData || typeof propertyData.price === 'undefined' || propertyInfo.ownerId !== playerId || !propertyInfo.mortgaged) return state;
+        if (!player || !propertyData || propertyInfo.ownerId !== playerId || !propertyInfo.mortgaged) return state;
+        if (typeof propertyData.price === 'undefined') return state; // Ensure property has a price
 
         const unmortgageCost = Math.ceil((propertyData.price / 2) * 1.1);
         if (player.money < unmortgageCost) return state; // Not enough money

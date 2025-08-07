@@ -62,7 +62,7 @@ const getTextColorForBg = (hexColor?: string): 'black' | 'white' => {
 // --- CONFIGURACIÓN DEL SERVIDOR DE SEÑALIZACIÓN ---
 // Reemplaza esta URL con la URL de tu servidor de señalización en Render.
 // Ejemplo: 'mi-juego-monopoly-server.onrender.com'
-const PEER_SERVER_HOST = 'tu-app-de-render.onrender.com';
+const PEER_SERVER_HOST = 'https://mi-servidor-de-senales-render.onrender.com';
 
 
 // --- Main App Component ---

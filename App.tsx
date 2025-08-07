@@ -6,7 +6,7 @@ import { View, Player, PeerMessage, Property, HistoryEntry, PendingAction, GameA
 import { MAX_PLAYERS, PLAYER_COLORS, BOARD_SQUARES, BANK_ID, PASS_GO_MONEY, PROPERTIES } from './constants';
 import Card from './components/Card';
 import Modal from './components/Modal';
-import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, CrownIcon, BankIcon, HistoryIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon, SpinnerIcon } from './components/Icons';
+import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, BankIcon, HistoryIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon, SpinnerIcon } from './components/Icons';
 
 
 // --- Toast Notification System (in-file due to constraints) ---
@@ -915,8 +915,12 @@ const PropertyDetailModal = ({ isOpen, onClose, property, myPlayer, gameState, o
                     break;
                 case 'railroad':
                     const owner = gameState.players.find(p => p.id === propertyState.ownerId);
-                    const ownedRailroads = owner!.properties.filter(pId => propertiesData[pId].type === 'railroad').length;
-                    rentAmount = property.rent[ownedRailroads - 1];
+                    if (owner) {
+                        const ownedRailroads = owner.properties.filter(pId => propertiesData[pId].type === 'railroad').length;
+                        if (ownedRailroads > 0 && ownedRailroads <= property.rent.length) {
+                           rentAmount = property.rent[ownedRailroads - 1];
+                        }
+                    }
                     break;
                 case 'utility':
                     const parsedDiceRoll = parseInt(diceRoll, 10);
@@ -925,9 +929,13 @@ const PropertyDetailModal = ({ isOpen, onClose, property, myPlayer, gameState, o
                         return;
                     }
                     const ownerUtil = gameState.players.find(p => p.id === propertyState.ownerId);
-                    const ownedUtilities = ownerUtil!.properties.filter(pId => propertiesData[pId].type === 'utility').length;
-                    const multiplier = property.rent[ownedUtilities - 1];
-                    rentAmount = multiplier * parsedDiceRoll;
+                    if (ownerUtil) {
+                        const ownedUtilities = ownerUtil.properties.filter(pId => propertiesData[pId].type === 'utility').length;
+                        if (ownedUtilities > 0 && ownedUtilities <= property.rent.length) {
+                            const multiplier = property.rent[ownedUtilities - 1];
+                            rentAmount = multiplier * parsedDiceRoll;
+                        }
+                    }
                     break;
             }
         }

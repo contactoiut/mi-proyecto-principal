@@ -33,6 +33,7 @@ export interface GameState {
 
 export type GameAction =
   | { type: 'INITIALIZE_GAME'; payload: { playerNames: string[] } }
+  | { type: 'ADD_PLAYER'; payload: { playerName: string } }
   | { type: 'SET_STATE'; payload: GameState }
   | { type: 'TRANSFER_MONEY'; payload: { fromId: string; toId: string; amount: number } }
   | { type: 'BUY_PROPERTY'; payload: { playerId: string; propertyId: string; price: number } }
@@ -49,9 +50,9 @@ export interface PendingAction {
     action: GameAction;
 }
 
-export type View = 'home' | 'lobby' | 'game' | 'board';
+export type View = 'home' | 'game' | 'board';
 
 export interface PeerMessage {
-    type: 'JOIN_REQUEST' | 'LOBBY_UPDATE' | 'GAME_START' | 'STATE_UPDATE' | 'HOST_ACTION_REQUEST' | 'ACTION_RESPONSE';
+    type: 'JOIN_REQUEST' | 'STATE_UPDATE' | 'HOST_ACTION_REQUEST' | 'ACTION_RESPONSE';
     payload: any;
 }

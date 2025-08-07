@@ -1,7 +1,7 @@
 
 import { useReducer } from 'react';
 import { GameState, GameAction, Player, HistoryEntry } from '../types';
-import { INITIAL_MONEY, PROPERTIES, BANK_ID, PASS_GO_MONEY } from '../constants';
+import { INITIAL_MONEY, PROPERTIES, BANK_ID, PASS_GO_MONEY, MAX_PLAYERS } from '../constants';
 
 const initialState: GameState = {
   players: [],
@@ -38,6 +38,26 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         bankProperties: PROPERTIES.map(p => p.id),
         history: [createHistoryEntry('La partida ha comenzado.')],
       };
+    }
+    case 'ADD_PLAYER': {
+        const { playerName } = action.payload;
+        if (state.players.length >= MAX_PLAYERS) {
+            console.warn('Máximo de jugadores alcanzado. No se puede añadir al nuevo jugador.');
+            return state;
+        }
+        const newPlayer: Player = {
+            id: `player-${state.players.length + 1}`,
+            name: playerName,
+            money: INITIAL_MONEY,
+            properties: [],
+            buildings: {},
+        };
+        const message = `${playerName} se ha unido a la partida.`;
+        return {
+            ...state,
+            players: [...state.players, newPlayer],
+            history: [...state.history, createHistoryEntry(message)],
+        };
     }
     case 'SET_STATE':
         return action.payload;

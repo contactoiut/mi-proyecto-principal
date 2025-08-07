@@ -6,7 +6,7 @@ import { View, Player, PeerMessage, Property, HistoryEntry, PendingAction, GameA
 import { MAX_PLAYERS, PLAYER_COLORS, BOARD_SQUARES, BANK_ID, PASS_GO_MONEY, PROPERTIES } from './constants';
 import Card from './components/Card';
 import Modal from './components/Modal';
-import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, CrownIcon, BankIcon, HistoryIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon } from './components/Icons';
+import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, CrownIcon, BankIcon, HistoryIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon, SpinnerIcon } from './components/Icons';
 
 
 // --- Toast Notification System (in-file due to constraints) ---
@@ -64,12 +64,12 @@ const getTextColorForBg = (hexColor?: string): 'black' | 'white' => {
 // ¡IMPORTANTE! No incluyas "https://". Solo el dominio.
 const PEER_SERVER_HOST = 'mi-servidor-de-senales-render.onrender.com';
 
+type ServerStatus = 'checking' | 'online' | 'offline' | 'local';
 
 // --- Main App Component ---
 const App: React.FC = () => {
     const [view, setView] = useState<View>('home');
     const [playerName, setPlayerName] = useState('');
-    const [lobbyPlayers, setLobbyPlayers] = useState<string[]>([]);
     const [isHost, setIsHost] = useState(false);
     const [hostId, setHostId] = useState('');
     const [error, setError] = useState<string | null>(null);
@@ -77,6 +77,7 @@ const App: React.FC = () => {
     const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
     const [toasts, setToasts] = useState<ToastData[]>([]);
     const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
+    const [serverStatus, setServerStatus] = useState<ServerStatus>(!PEER_SERVER_HOST ? 'local' : 'checking');
 
 
     const peerRef = useRef<Peer | null>(null);
@@ -85,15 +86,18 @@ const App: React.FC = () => {
     
     const myPlayerId = useMemo(() => {
         if (devPlayerViewId) return devPlayerViewId;
-        if (isHost) return 'player-1';
-        if (view === 'game' || view === 'lobby' || view === 'board') {
-            const myPlayerIndex = lobbyPlayers.findIndex(name => name === playerName);
-            if (myPlayerIndex !== -1) {
-                return `player-${myPlayerIndex + 1}`;
+        // For real games (host or client) find the player by name.
+        if (gameState.players && playerName) {
+            const player = gameState.players.find(p => p.name === playerName);
+            if (player) {
+                return player.id;
             }
         }
+        // Fallback for the host before the game state is initialized.
+        if (isHost) return 'player-1';
+
         return null;
-    }, [devPlayerViewId, isHost, lobbyPlayers, playerName, view]);
+    }, [devPlayerViewId, isHost, gameState.players, playerName]);
 
     const addToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
         const id = `${Date.now()}-${Math.random()}`;
@@ -109,6 +113,63 @@ const App: React.FC = () => {
             conn.send(message);
         });
     }, []);
+
+    const checkServerStatus = useCallback(() => {
+        if (!PEER_SERVER_HOST) {
+            setServerStatus('local');
+            return;
+        }
+    
+        setServerStatus('checking');
+        setError(null);
+    
+        let tempPeer: Peer | null = null;
+        const timer = setTimeout(() => {
+            if (tempPeer) {
+                tempPeer.destroy();
+            }
+            setServerStatus('offline');
+            setError('El servidor no responde. Revisa la URL o inténtalo más tarde.');
+        }, 8000); // 8-second timeout
+    
+        try {
+            const peerConfig = {
+                host: PEER_SERVER_HOST,
+                path: '/peerjs',
+                secure: true,
+                config: { 'iceServers': [] } // Skip STUN for a faster check
+            };
+            const randomId = `bancomaton-check-${Math.random().toString(36).substring(2, 9)}`;
+            tempPeer = new Peer(randomId, peerConfig);
+    
+            tempPeer.on('open', () => {
+                clearTimeout(timer);
+                setServerStatus('online');
+                tempPeer?.destroy();
+            });
+    
+            tempPeer.on('error', (err) => {
+                clearTimeout(timer);
+                setServerStatus('offline');
+                if (err.type === 'peer-unavailable') {
+                    setError('El servidor de señalización no está disponible en la URL proporcionada.');
+                } else {
+                    setError(`Error de conexión: ${err.message}`);
+                }
+                tempPeer?.destroy();
+            });
+        } catch (e) {
+            clearTimeout(timer);
+            setServerStatus('offline');
+            setError('No se pudo inicializar el cliente de conexión.');
+        }
+    }, []);
+
+    useEffect(() => {
+        if (PEER_SERVER_HOST) {
+            checkServerStatus();
+        }
+    }, [checkServerStatus]);
     
     useEffect(() => {
         if(isHost && gameState.players.length > 0) {
@@ -165,7 +226,6 @@ const App: React.FC = () => {
     }, [gameState.players]);
 
     const getPeerConfig = (id?: string) => {
-      // Si la constante está vacía, asumimos desarrollo local.
       if (!PEER_SERVER_HOST) {
           console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
           if (id) return new Peer(id);
@@ -195,8 +255,8 @@ const App: React.FC = () => {
         peer.on('open', (peerId) => {
             setHostId(peerId);
             setIsHost(true);
-            setLobbyPlayers([playerName]);
-            setView('lobby');
+            dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: [playerName] } });
+            setView('game');
         });
 
         peer.on('connection', (conn) => {
@@ -205,12 +265,11 @@ const App: React.FC = () => {
                 const message = data as PeerMessage;
                 if (isHost) {
                     if (message.type === 'JOIN_REQUEST') {
-                        if (lobbyPlayers.length < MAX_PLAYERS) {
-                            const newLobbyPlayers = [...lobbyPlayers, message.payload.name];
-                            setLobbyPlayers(newLobbyPlayers);
-                            const updateMessage: PeerMessage = { type: 'LOBBY_UPDATE', payload: { players: newLobbyPlayers } };
-                            broadcastMessage(updateMessage);
-                            conn.send(updateMessage);
+                        if (gameState.players.length < MAX_PLAYERS) {
+                            dispatch({ type: 'ADD_PLAYER', payload: { playerName: message.payload.name } });
+                            addToast(`${message.payload.name} se ha unido.`, 'success');
+                        } else {
+                            console.log("Juego lleno, rechazando jugador.");
                         }
                     } else if (message.type === 'HOST_ACTION_REQUEST') {
                         handleClientRequest(message.payload);
@@ -233,41 +292,36 @@ const App: React.FC = () => {
             setError('Por favor, introduce tu nombre.');
             return;
         }
+        setError(null);
         initializePeer();
     };
 
     const joinGame = () => {
         if (!playerName) { setError('Por favor, introduce tu nombre.'); return; }
         if (!hostId) { setError('Por favor, introduce el ID de la partida.'); return; }
-        setView('lobby');
         
+        setError(null);
         const peer = getPeerConfig(); // Guests don't need a specific ID
         peerRef.current = peer;
 
         peer.on('open', () => {
-            // By re-checking hostId inside the async callback, we satisfy
-            // TypeScript's strict null checks for variables from an outer scope.
-            if (!hostId) {
+            const stableHostId = hostId;
+            if (!stableHostId) {
                 setError(`No se pudo conectar al ID. Verifica que sea correcto.`);
                 setView('home');
                 return;
             }
-            const conn = peer.connect(hostId);
+            const conn = peer.connect(stableHostId);
             if (!conn) {
-                setError(`No se pudo conectar al ID: ${hostId}. Verifica que sea correcto.`);
+                setError(`No se pudo conectar al ID: ${stableHostId}. Verifica que sea correcto.`);
                 setView('home');
                 return;
             }
-            connectionsRef.current[hostId] = conn;
+            connectionsRef.current[stableHostId] = conn;
             conn.on('open', () => conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } }));
             conn.on('data', (data: any) => {
                 const message = data as PeerMessage;
-                if (message.type === 'LOBBY_UPDATE') {
-                    setLobbyPlayers(message.payload.players);
-                } else if (message.type === 'GAME_START') {
-                    dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: message.payload.players } });
-                    setView('game');
-                } else if (message.type === 'STATE_UPDATE') {
+                if (message.type === 'STATE_UPDATE') {
                     dispatch({ type: 'SET_STATE', payload: message.payload });
                     if(!['game', 'board'].includes(view)) setView('game');
                 } else if (message.type === 'ACTION_RESPONSE') {
@@ -280,12 +334,6 @@ const App: React.FC = () => {
          peer.on('error', (err) => { setError(`Error al unirse: ${err.message}. Verifica el ID.`); setView('home'); });
     };
     
-    const startGame = () => {
-        dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: lobbyPlayers } });
-        broadcastMessage({ type: 'GAME_START', payload: { players: lobbyPlayers } });
-        setView('game');
-    };
-
     const enterDevMode = () => {
         const devPlayers = ['Anfitrión (Dev)', 'Invitado 1 (Dev)', 'Invitado 2 (Dev)'];
         dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: devPlayers } });
@@ -295,11 +343,13 @@ const App: React.FC = () => {
     };
     
     const sendRequestToHost = (action: GameAction) => {
-        const myPlayerIndex = lobbyPlayers.findIndex(name => name === playerName);
-        const currentPlayerId = `player-${myPlayerIndex + 1}`;
+        if (!myPlayerId) {
+            addToast("Error: No se pudo identificar al jugador.", "error");
+            return;
+        }
         const conn = connectionsRef.current[hostId];
         if (conn) {
-            conn.send({type: 'HOST_ACTION_REQUEST', payload: { requesterId: currentPlayerId, action }});
+            conn.send({type: 'HOST_ACTION_REQUEST', payload: { requesterId: myPlayerId, action }});
         }
     };
     
@@ -345,8 +395,6 @@ const App: React.FC = () => {
 
     const renderView = () => {
         switch (view) {
-            case 'lobby':
-                return <LobbyScreen hostId={hostId} players={lobbyPlayers} isHost={isHost} onStartGame={startGame} />;
             case 'game':
                 const myPlayer = gameState.players.find(p => p.id === myPlayerId);
                 
@@ -360,7 +408,8 @@ const App: React.FC = () => {
                 return <GameScreen 
                     gameState={gameState} 
                     myPlayer={myPlayer} 
-                    isHost={isHost} 
+                    isHost={isHost}
+                    hostId={hostId}
                     onPlayerRequestAction={playerRequestAction}
                     onHostDirectAction={dispatch}
                     pendingActions={pendingActions}
@@ -389,6 +438,8 @@ const App: React.FC = () => {
                     onJoinGame={joinGame}
                     onDevMode={enterDevMode}
                     error={error}
+                    serverStatus={serverStatus}
+                    onRetry={checkServerStatus}
                 />;
         }
     };
@@ -423,12 +474,58 @@ const App: React.FC = () => {
 
 // --- View Components ---
 
-const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, error }: any) => (
+const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, error, serverStatus, onRetry }: any) => {
+    
+    const isInteractive = serverStatus === 'online' || serverStatus === 'local';
+
+    const ServerStatusIndicator = () => {
+        switch (serverStatus) {
+            case 'checking':
+                return (
+                    <div className="flex items-center justify-center gap-2 text-slate-400 p-3 rounded-md bg-slate-800/50">
+                        <SpinnerIcon className="w-5 h-5" />
+                        <span>Conectando al servidor...</span>
+                    </div>
+                );
+            case 'online':
+                 return (
+                    <div className="flex items-center justify-center gap-2 text-green-300 p-3 rounded-md bg-green-500/20">
+                        <CheckCircleIcon className="w-5 h-5" />
+                        <span>Servidor en línea</span>
+                    </div>
+                );
+            case 'offline':
+                return (
+                    <div className="text-center">
+                         <div className="flex items-center justify-center gap-2 text-red-300 p-3 rounded-md bg-red-500/20 border border-red-400/50">
+                            <XCircleIcon className="w-6 h-6 flex-shrink-0" />
+                            <span className="text-left">{error || 'Error de conexión con el servidor'}</span>
+                        </div>
+                        <button onClick={onRetry} className="mt-2 text-sm text-teal-400 hover:text-teal-300 font-semibold">Reintentar</button>
+                    </div>
+                );
+            case 'local':
+                 return (
+                    <div className="flex items-center justify-center gap-2 text-sky-300 p-3 rounded-md bg-sky-500/20">
+                        <CheckCircleIcon className="w-5 h-5" />
+                        <span>Modo desarrollador local</span>
+                    </div>
+                );
+            default:
+                return null;
+        }
+    };
+    
+    return (
     <Card className="w-full max-w-md">
         <h1 className="text-4xl font-bold text-center text-teal-400 mb-2">Bancomatón</h1>
         <p className="text-slate-400 text-center mb-6">Tu banca digital para juegos de mesa</p>
         
-        {error && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
+        <div className="mb-4">
+            <ServerStatusIndicator />
+        </div>
+
+        {error && serverStatus === 'online' && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
 
         <div className="space-y-4">
             <input 
@@ -438,7 +535,13 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
                 placeholder="Tu nombre de jugador" 
                 className="w-full bg-slate-900 border border-slate-700 rounded-md px-4 py-2 focus:ring-2 focus:ring-teal-500 focus:outline-none"
             />
-            <button onClick={onCreateGame} className="w-full bg-teal-600 hover:bg-teal-500 rounded-md py-3 font-bold transition-colors">Crear Partida</button>
+            <button 
+                onClick={onCreateGame} 
+                disabled={!isInteractive}
+                className="w-full bg-teal-600 hover:bg-teal-500 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
+            >
+                Crear Partida
+            </button>
             
             <div className="flex items-center space-x-2">
                 <hr className="flex-grow border-slate-700"/>
@@ -453,49 +556,43 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
                 placeholder="ID de la partida"
                 className="w-full bg-slate-900 border border-slate-700 rounded-md px-4 py-2 focus:ring-2 focus:ring-teal-500 focus:outline-none"
             />
-            <button onClick={onJoinGame} className="w-full bg-slate-700 hover:bg-slate-600 rounded-md py-3 font-bold transition-colors">Unirse a Partida</button>
+            <button 
+                onClick={onJoinGame}
+                disabled={!isInteractive} 
+                className="w-full bg-slate-700 hover:bg-slate-600 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
+            >
+                Unirse a Partida
+            </button>
             
             <div className="pt-4">
                  <button onClick={onDevMode} className="w-full text-sm text-slate-500 hover:text-teal-400 transition-colors">Entrar en Modo Desarrollador</button>
             </div>
         </div>
     </Card>
-);
+)};
 
-const LobbyScreen = ({ hostId, players, isHost, onStartGame }: any) => (
-    <Card className="w-full max-w-md text-center">
-        <h2 className="text-3xl font-bold text-teal-400 mb-4">Sala de Espera</h2>
-        {isHost && (
-            <div className="mb-6">
-                <p className="text-slate-400 mb-2">Comparte este ID con otros jugadores:</p>
-                <div className="bg-slate-900 p-3 rounded-md border border-dashed border-slate-600 font-mono text-lg text-teal-300">
-                    {hostId}
-                </div>
-            </div>
-        )}
-        <div className="mb-6">
-            <h3 className="font-bold text-xl mb-3 flex items-center justify-center gap-2"><PlayersIcon className="w-6 h-6" /> Jugadores Conectados ({players.length}/{MAX_PLAYERS})</h3>
-            <ul className="space-y-2">
-                {players.map((name: string, index: number) => (
-                    <li key={index} className="bg-slate-700 p-3 rounded-md flex items-center gap-3">
-                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: PLAYER_COLORS[index] }}></div>
-                        <span className="font-semibold">{name}</span>
-                         {index === 0 && <CrownIcon className="w-5 h-5 text-yellow-400 ml-auto" />}
-                    </li>
-                ))}
-            </ul>
-        </div>
-        {isHost ? (
-             <button onClick={onStartGame} disabled={players.length < 2} className="w-full bg-teal-600 hover:bg-teal-500 rounded-md py-3 font-bold transition-colors disabled:bg-slate-600 disabled:cursor-not-allowed">
-                Iniciar Partida
+const ShareGameID = ({ hostId }: { hostId: string }) => {
+    const [copied, setCopied] = useState(false);
+
+    const copyToClipboard = () => {
+        navigator.clipboard.writeText(hostId).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        });
+    };
+
+    return (
+        <div className="absolute top-2 left-2 bg-slate-700/80 backdrop-blur-sm p-2 rounded-lg text-sm flex items-center gap-2 z-10 shadow-lg border border-slate-600">
+            <span className="font-bold text-slate-300">ID de Partida:</span>
+            <span className="font-mono text-teal-300 bg-slate-900 px-2 py-1 rounded">{hostId}</span>
+            <button onClick={copyToClipboard} className="bg-teal-600 hover:bg-teal-500 px-2 py-1 rounded-md font-semibold text-xs transition-colors w-20">
+                {copied ? '¡Copiado!' : 'Copiar'}
             </button>
-        ) : (
-            <p className="text-slate-400 animate-pulse">Esperando a que el anfitrión inicie la partida...</p>
-        )}
-    </Card>
-);
+        </div>
+    );
+};
 
-const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHostDirectAction, pendingActions, onApprove, onDeny, devPlayerViewId, onSetDevPlayerViewId, onNavigateToBoard, setSelectedPropertyId }: any) => {
+const GameScreen = ({ gameState, myPlayer, isHost, hostId, onPlayerRequestAction, onHostDirectAction, pendingActions, onApprove, onDeny, devPlayerViewId, onSetDevPlayerViewId, onNavigateToBoard, setSelectedPropertyId }: any) => {
     const [isPayModalOpen, setPayModalOpen] = useState(false);
     const [isHostPanelOpen, setHostPanelOpen] = useState(false);
     
@@ -507,7 +604,12 @@ const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHost
     const isCurrentViewHost = devPlayerViewId ? devPlayerViewId === 'player-1' : isHost;
 
     if (!myPlayer) {
-        return <div className="text-center">Cargando datos del jugador...</div>;
+        return (
+            <div className="text-center p-8">
+                <h2 className="text-2xl font-bold text-teal-400 animate-pulse">Conectando a la partida...</h2>
+                <p className="text-slate-400 mt-2">Recibiendo estado del juego del anfitrión.</p>
+            </div>
+        );
     }
 
     const handleRequestPay = () => {
@@ -523,12 +625,12 @@ const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHost
     };
     
     const DevPlayerSwitcher = () => (
-        <div className="absolute top-2 right-2 bg-slate-700 p-1 rounded-md text-xs flex gap-1 z-10">
+        <div className="absolute top-2 right-2 bg-slate-700/80 backdrop-blur-sm p-1 rounded-md text-xs flex gap-1 z-10 border border-slate-600">
             {gameState.players.map((p: Player) => (
                 <button 
                     key={p.id}
                     onClick={() => onSetDevPlayerViewId(p.id)}
-                    className={`px-2 py-1 rounded ${devPlayerViewId === p.id ? 'bg-teal-500 font-bold' : 'bg-slate-600'}`}
+                    className={`px-2 py-1 rounded ${devPlayerViewId === p.id ? 'bg-teal-500 font-bold' : 'bg-slate-600 hover:bg-slate-500'}`}
                 >
                     {p.name.split(' ')[0]}
                 </button>
@@ -551,12 +653,13 @@ const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHost
 
     const hasPendingActions = pendingActions.length > 0;
     const bankButtonClasses = hasPendingActions
-      ? 'bg-yellow-600 hover:bg-yellow-500'
+      ? 'bg-yellow-600 hover:bg-yellow-500 animate-pulse'
       : 'bg-sky-600 hover:bg-sky-500';
 
     return (
         <div className="w-full max-w-4xl mx-auto relative">
              {devPlayerViewId && <DevPlayerSwitcher />}
+             {isHost && hostId && !devPlayerViewId && <ShareGameID hostId={hostId} />}
 
             <Card className="mb-4">
                 <div className="flex justify-between items-center flex-wrap gap-2">

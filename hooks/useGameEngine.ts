@@ -1,5 +1,4 @@
 
-import React from 'react';
 import { useReducer } from 'react';
 import { GameState, GameAction, Player, HistoryEntry } from '../types';
 import { INITIAL_MONEY, PROPERTIES, BANK_ID, PASS_GO_MONEY } from '../constants';
@@ -137,7 +136,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         const propertyInfo = state.properties[propertyId];
         const propertyData = PROPERTIES.find(p => p.id === propertyId);
 
-        if (!player || !propertyData || propertyInfo.ownerId !== playerId || propertyInfo.mortgaged) return state;
+        if (!player || !propertyData || typeof propertyData.price === 'undefined' || propertyInfo.ownerId !== playerId || propertyInfo.mortgaged) return state;
 
         const mortgageValue = propertyData.price / 2;
         const players = state.players.map(p => 
@@ -154,7 +153,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         const propertyInfo = state.properties[propertyId];
         const propertyData = PROPERTIES.find(p => p.id === propertyId);
 
-        if (!player || !propertyData || propertyInfo.ownerId !== playerId || !propertyInfo.mortgaged) return state;
+        if (!player || !propertyData || typeof propertyData.price === 'undefined' || propertyInfo.ownerId !== playerId || !propertyInfo.mortgaged) return state;
 
         const unmortgageCost = Math.ceil((propertyData.price / 2) * 1.1);
         if (player.money < unmortgageCost) return state; // Not enough money

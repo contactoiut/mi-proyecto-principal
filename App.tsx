@@ -6,7 +6,7 @@ import { View, Player, PeerMessage, Property, HistoryEntry, PendingAction, GameA
 import { MAX_PLAYERS, PLAYER_COLORS, BOARD_SQUARES, BANK_ID, PASS_GO_MONEY, PROPERTIES } from './constants';
 import Card from './components/Card';
 import Modal from './components/Modal';
-import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, LinkIcon, CrownIcon, BankIcon, HistoryIcon, BellIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon } from './components/Icons';
+import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, CrownIcon, BankIcon, HistoryIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon } from './components/Icons';
 
 
 // --- Toast Notification System (in-file due to constraints) ---
@@ -168,7 +168,7 @@ const App: React.FC = () => {
       // Si la constante está vacía, asumimos desarrollo local.
       if (!PEER_SERVER_HOST) {
           console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
-          return new Peer(id);
+          return id ? new Peer(id) : new Peer();
       }
 
       const peerConfig = {
@@ -183,7 +183,7 @@ const App: React.FC = () => {
           }
       };
       
-      return new Peer(id, peerConfig);
+      return id ? new Peer(id, peerConfig) : new Peer(peerConfig);
     };
 
     const initializePeer = () => {
@@ -237,19 +237,20 @@ const App: React.FC = () => {
     const joinGame = () => {
         if (!playerName) { setError('Por favor, introduce tu nombre.'); return; }
         if (!hostId) { setError('Por favor, introduce el ID de la partida.'); return; }
+        const stableHostId = hostId;
         setView('lobby');
         
         const peer = getPeerConfig(undefined); // Guests don't need a specific ID
         peerRef.current = peer;
 
         peer.on('open', () => {
-            const conn = peer.connect(hostId);
+            const conn = peer.connect(stableHostId);
             if (!conn) {
-                setError(`No se pudo conectar al ID: ${hostId}. Verifica que sea correcto.`);
+                setError(`No se pudo conectar al ID: ${stableHostId}. Verifica que sea correcto.`);
                 setView('home');
                 return;
             }
-            connectionsRef.current[hostId] = conn;
+            connectionsRef.current[stableHostId] = conn;
             conn.on('open', () => conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } }));
             conn.on('data', (data: any) => {
                 const message = data as PeerMessage;

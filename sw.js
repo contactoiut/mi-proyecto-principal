@@ -1,4 +1,12 @@
 
+// El contenido de este Service Worker ha sido desactivado.
+// La estrategia de cacheo original ("cache-first" para archivos fuente como .tsx)
+// es incompatible con un proceso de construcción moderno como el de Vite,
+// donde los nombres de archivo son hasheados y su contenido es transformado.
+// Mantenerlo activo causaría errores graves al servir versiones antiguas
+// o incorrectas de la aplicación.
+
+/*
 const CACHE_NAME = 'bancomaton-cache-v1';
 const URLS_TO_CACHE = [
   '/',
@@ -47,3 +55,4 @@ self.addEventListener('activate', event => {
     })
   );
 });
+*/

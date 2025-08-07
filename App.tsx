@@ -60,9 +60,10 @@ const getTextColorForBg = (hexColor?: string): 'black' | 'white' => {
 };
 
 // --- CONFIGURACIÓN DEL SERVIDOR DE SEÑALIZACIÓN ---
-// Reemplaza esta URL con la URL de tu servidor de señalización en Render.
-// Ejemplo: 'mi-juego-monopoly-server.onrender.com'
-const PEER_SERVER_HOST = 'https://mi-servidor-de-senales-render.onrender.com';
+// Reemplaza esta URL con el HOSTNAME de tu servidor en Render.
+// ¡IMPORTANTE! No incluyas "https://". Solo el dominio.
+// Ejemplo: 'mi-servidor.onrender.com'
+const PEER_SERVER_HOST = 'mi-servidor-de-senales-render.onrender.com'; // <-- ¡REEMPLAZA ESTO!
 
 
 // --- Main App Component ---
@@ -166,7 +167,7 @@ const App: React.FC = () => {
 
     const getPeerConfig = (id?: string) => {
       // Si la URL es la de ejemplo, asumimos que es desarrollo local.
-      if (PEER_SERVER_HOST === 'tu-app-de-render.onrender.com') {
+      if (PEER_SERVER_HOST === 'tu-servidor-de-render.onrender.com') {
           console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
           return new Peer(id);
       }

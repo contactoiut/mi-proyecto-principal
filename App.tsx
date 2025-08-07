@@ -60,10 +60,9 @@ const getTextColorForBg = (hexColor?: string): 'black' | 'white' => {
 };
 
 // --- CONFIGURACIÓN DEL SERVIDOR DE SEÑALIZACIÓN ---
-// Reemplaza esta URL con el HOSTNAME de tu servidor en Render.
+// URL del servidor de señalización en Render.
 // ¡IMPORTANTE! No incluyas "https://". Solo el dominio.
-// Ejemplo: 'mi-servidor.onrender.com'
-const PEER_SERVER_HOST = 'mi-servidor-de-senales-render.onrender.com'; // <-- ¡REEMPLAZA ESTO!
+const PEER_SERVER_HOST = 'mi-servidor-de-senales-render.onrender.com';
 
 
 // --- Main App Component ---
@@ -166,8 +165,8 @@ const App: React.FC = () => {
     }, [gameState.players]);
 
     const getPeerConfig = (id?: string) => {
-      // Si la URL es la de ejemplo, asumimos que es desarrollo local.
-      if (PEER_SERVER_HOST === 'tu-servidor-de-render.onrender.com') {
+      // Si la constante está vacía, asumimos desarrollo local.
+      if (!PEER_SERVER_HOST) {
           console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
           return new Peer(id);
       }

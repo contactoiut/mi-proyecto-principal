@@ -184,7 +184,7 @@ const NetWorthIndicator = ({ gameState, propertiesData }: { gameState: GameState
 
 // --- View Components ---
 
-const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, error, serverStatus, onRetry, onOpenScanner }: any) => {
+const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, error, serverStatus, onRetry, onOpenScanner, isJoining }: any) => {
     
     const isInteractive = serverStatus === 'online' || serverStatus === 'local';
     
@@ -197,7 +197,7 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
             <ServerStatusIndicator serverStatus={serverStatus} error={error} onRetry={onRetry} />
         </div>
 
-        {error && serverStatus === 'online' && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
+        {error && (serverStatus === 'online' || serverStatus === 'offline') && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
 
         <div className="space-y-4">
             <input 
@@ -209,7 +209,7 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
             />
             <button 
                 onClick={onCreateGame} 
-                disabled={!isInteractive}
+                disabled={!isInteractive || isJoining}
                 className="w-full bg-teal-600 hover:bg-teal-500 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
             >
                 Crear Partida
@@ -230,7 +230,7 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
                 />
                  <button 
                     onClick={onOpenScanner}
-                    disabled={!isInteractive} 
+                    disabled={!isInteractive || isJoining} 
                     className="bg-slate-700 hover:bg-slate-600 p-3 rounded-md font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
                     aria-label="Escanear código QR"
                 >
@@ -239,10 +239,17 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
             </div>
             <button 
                 onClick={onJoinGame}
-                disabled={!isInteractive} 
-                className="w-full bg-slate-700 hover:bg-slate-600 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
+                disabled={!isInteractive || isJoining} 
+                className="w-full bg-slate-700 hover:bg-slate-600 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed flex items-center justify-center"
             >
-                Unirse a Partida
+                {isJoining ? (
+                    <>
+                        <SpinnerIcon className="w-5 h-5 mr-2" />
+                        Uniéndose...
+                    </>
+                ) : (
+                    'Unirse a Partida'
+                )}
             </button>
             
             <div className="pt-4">
@@ -913,10 +920,12 @@ const App: React.FC = () => {
     const [serverStatus, setServerStatus] = useState<ServerStatus>(!PEER_SERVER_HOST ? 'local' : 'checking');
     const [isScannerOpen, setScannerOpen] = useState(false);
     const [isShareModalOpen, setShareModalOpen] = useState(false);
+    const [isJoining, setIsJoining] = useState(false);
 
 
     const peerRef = useRef<Peer | null>(null);
     const connectionsRef = useRef<Record<string, DataConnection>>({});
+    const joinTimeoutRef = useRef<number | null>(null);
     const { gameState, dispatch } = useGameEngine();
     
     const myPlayerId = useMemo(() => {
@@ -1137,47 +1146,82 @@ const App: React.FC = () => {
         if (!finalHostId) { setError('Por favor, introduce o escanea el ID de la partida.'); return; }
         
         setError(null);
-        const peer = getPeerConfig(); // Guests don't need a specific ID
+        setIsJoining(true);
+
+        if (joinTimeoutRef.current) clearTimeout(joinTimeoutRef.current);
+        joinTimeoutRef.current = window.setTimeout(() => {
+            setError('Tiempo de espera agotado. No se pudo conectar a la partida. Verifica el ID y que el anfitrión esté esperando.');
+            setIsJoining(false);
+            peerRef.current?.destroy();
+        }, 15000);
+
+        const peer = getPeerConfig();
         peerRef.current = peer;
 
         peer.on('open', () => {
             if (!finalHostId) {
                 setError(`No se pudo conectar al ID. Verifica que sea correcto.`);
                 setView('home');
+                setIsJoining(false);
+                clearTimeout(joinTimeoutRef.current!);
                 return;
             }
-            const conn = peer.connect(finalHostId);
+            const conn = peer.connect(finalHostId, { reliable: true });
             if (!conn) {
-                setError(`No se pudo conectar al ID: ${finalHostId}. Verifica que sea correcto.`);
+                setError(`No se pudo iniciar la conexión al ID: ${finalHostId}.`);
                 setView('home');
+                setIsJoining(false);
+                clearTimeout(joinTimeoutRef.current!);
                 return;
             }
+
             connectionsRef.current[finalHostId] = conn;
+
             conn.on('open', () => conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } }));
+            
             conn.on('data', (data: any) => {
                 const message = data as PeerMessage;
                 if (message.type === 'STATE_UPDATE') {
+                    clearTimeout(joinTimeoutRef.current!);
                     dispatch({ type: 'SET_STATE', payload: message.payload });
                     if(!['game', 'board'].includes(view)) setView('game');
+                    setIsJoining(false);
                 } else if (message.type === 'ACTION_RESPONSE') {
                     if (message.payload.requesterId === myPlayerId) {
                         addToast(message.payload.message, message.payload.success ? 'success' : 'error');
                     }
                 }
             });
+
+            conn.on('error', (err) => {
+                console.error('Error en la conexión:', err);
+                setError(`Error en la conexión: ${err.message}`);
+                setIsJoining(false);
+                clearTimeout(joinTimeoutRef.current!);
+            });
         });
-         peer.on('error', (err) => { setError(`Error al unirse: ${err.message}. Verifica el ID.`); setView('home'); });
+
+         peer.on('error', (err) => {
+            console.error('Error de PeerJS:', err);
+            let userMessage = `Error al unirse: ${err.message}.`;
+            if (err.type === 'peer-unavailable') {
+                userMessage = 'No se encontró la partida con ese ID. Por favor, verifica que es correcto y que el anfitrión te está esperando.';
+            }
+            setError(userMessage);
+            setView('home');
+            setIsJoining(false);
+            clearTimeout(joinTimeoutRef.current!);
+         });
     };
 
     const handleScanSuccess = (result: string | null) => {
         if (result) {
-            setHostId(result); // Update the input field visually
-            setScannerOpen(false); // Close scanner
+            setHostId(result);
+            setScannerOpen(false);
             if (!playerName) {
                 addToast("Por favor, introduce tu nombre primero.", "error");
                 return;
             }
-            // Use the scanned result directly to join
             joinGame(result);
         }
     };
@@ -1289,6 +1333,7 @@ const App: React.FC = () => {
                     serverStatus={serverStatus}
                     onRetry={checkServerStatus}
                     onOpenScanner={() => setScannerOpen(true)}
+                    isJoining={isJoining}
                 />;
         }
     };

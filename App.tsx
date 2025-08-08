@@ -309,7 +309,7 @@ const QRScannerModal: React.FC<{ isOpen: boolean; onClose: () => void; onScanSuc
             onScanSuccessRef.current(decodedText);
         };
 
-        const handleError = (errorMessage: string) => {
+        const handleError = (_errorMessage: string) => {
             // This callback fires every frame that a QR code is not found.
             // We can safely ignore it.
         };
@@ -321,7 +321,7 @@ const QRScannerModal: React.FC<{ isOpen: boolean; onClose: () => void; onScanSuc
 
         return () => {
             if (scanner && typeof scanner.clear === 'function') {
-                scanner.clear().catch(error => {
+                scanner.clear().catch((_error: any) => {
                     // This can happen if the component unmounts before scanner is fully initialized
                     // or if it's already cleared. It's safe to ignore.
                 });

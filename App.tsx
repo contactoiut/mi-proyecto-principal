@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Peer, { DataConnection } from 'peerjs';
 import { QRCodeSVG } from 'qrcode.react';
@@ -1076,6 +1077,7 @@ const App: React.FC = () => {
           return new Peer();
       }
 
+      // Configuración robusta de ICE para mejorar la conectividad a través de NATs y firewalls.
       const peerConfig = {
           host: PEER_SERVER_HOST,
           path: '/peerjs',
@@ -1084,6 +1086,14 @@ const App: React.FC = () => {
               'iceServers': [
                   { urls: 'stun:stun.l.google.com:19302' },
                   { urls: 'stun:stun1.l.google.com:19302' },
+                  { urls: 'stun:stun.twilio.com:3478' },
+                  // Un servidor TURN público como fallback. Esencial para redes restrictivas.
+                  // OpenRelay proporciona un servicio gratuito para desarrollo.
+                  {
+                      urls: "turn:openrelay.turn.corevoip.net:5349",
+                      username: "user",
+                      credential: "password"
+                  }
               ]
           }
       };
@@ -1166,6 +1176,7 @@ const App: React.FC = () => {
                 clearTimeout(joinTimeoutRef.current!);
                 return;
             }
+            console.log('Cliente PeerJS abierto. Intentando conectar a:', finalHostId);
             const conn = peer.connect(finalHostId, { reliable: true });
             if (!conn) {
                 setError(`No se pudo iniciar la conexión al ID: ${finalHostId}.`);
@@ -1177,7 +1188,10 @@ const App: React.FC = () => {
 
             connectionsRef.current[finalHostId] = conn;
 
-            conn.on('open', () => conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } }));
+            conn.on('open', () => {
+                 console.log('Conexión DataConnection abierta con el anfitrión. Enviando solicitud de unión.');
+                 conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } });
+            });
             
             conn.on('data', (data: any) => {
                 const message = data as PeerMessage;
@@ -1194,7 +1208,7 @@ const App: React.FC = () => {
             });
 
             conn.on('error', (err) => {
-                console.error('Error en la conexión:', err);
+                console.error('Error en DataConnection:', err);
                 setError(`Error en la conexión: ${err.message}`);
                 setIsJoining(false);
                 clearTimeout(joinTimeoutRef.current!);
@@ -1202,15 +1216,17 @@ const App: React.FC = () => {
         });
 
          peer.on('error', (err) => {
-            console.error('Error de PeerJS:', err);
+            console.error('Error de PeerJS:', err, 'Type:', err.type);
             let userMessage = `Error al unirse: ${err.message}.`;
             if (err.type === 'peer-unavailable') {
                 userMessage = 'No se encontró la partida con ese ID. Por favor, verifica que es correcto y que el anfitrión te está esperando.';
+            } else if (err.type === 'network' || err.type === 'webrtc') {
+                userMessage = 'Error de red al intentar conectar. Revisa tu conexión a internet o posible firewall.';
             }
             setError(userMessage);
             setView('home');
             setIsJoining(false);
-            clearTimeout(joinTimeoutRef.current!);
+            if (joinTimeoutRef.current) clearTimeout(joinTimeoutRef.current);
          });
     };
 

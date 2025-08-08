@@ -1,12 +1,14 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Peer, { DataConnection } from 'peerjs';
+import { QRCodeSVG } from 'qrcode.react';
+import { Html5QrcodeScanner, Html5QrcodeScanType } from 'html5-qrcode';
 import { useGameEngine } from './hooks/useGameEngine';
 import { View, Player, PeerMessage, Property, HistoryEntry, PendingAction, GameAction, GameState } from './types';
 import { MAX_PLAYERS, PLAYER_COLORS, BOARD_SQUARES, BANK_ID, PASS_GO_MONEY, PROPERTIES } from './constants';
 import Card from './components/Card';
 import Modal from './components/Modal';
-import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, BankIcon, HistoryIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon, SpinnerIcon } from './components/Icons';
+import { MoneyIcon, HouseIcon, HotelIcon, PlayersIcon, BankIcon, HistoryIcon, GiftIcon, TagIcon, CheckCircleIcon, XCircleIcon, HammerIcon, MapIcon, SpinnerIcon, QRIcon } from './components/Icons';
 
 
 // --- Toast Notification System (in-file due to constraints) ---
@@ -66,455 +68,125 @@ const PEER_SERVER_HOST = 'mi-servidor-de-senales-render.onrender.com';
 
 type ServerStatus = 'checking' | 'online' | 'offline' | 'local';
 
-// --- Main App Component ---
-const App: React.FC = () => {
-    const [view, setView] = useState<View>('home');
-    const [playerName, setPlayerName] = useState('');
-    const [isHost, setIsHost] = useState(false);
-    const [hostId, setHostId] = useState('');
-    const [error, setError] = useState<string | null>(null);
-    const [devPlayerViewId, setDevPlayerViewId] = useState<string | null>(null);
-    const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-    const [toasts, setToasts] = useState<ToastData[]>([]);
-    const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
-    const [serverStatus, setServerStatus] = useState<ServerStatus>(!PEER_SERVER_HOST ? 'local' : 'checking');
 
+// --- Helper Components (Extracted to fix Rules of Hooks violation) ---
 
-    const peerRef = useRef<Peer | null>(null);
-    const connectionsRef = useRef<Record<string, DataConnection>>({});
-    const { gameState, dispatch } = useGameEngine();
-    
-    const myPlayerId = useMemo(() => {
-        if (devPlayerViewId) return devPlayerViewId;
-        // For real games (host or client) find the player by name.
-        if (gameState.players && playerName) {
-            const player = gameState.players.find(p => p.name === playerName);
-            if (player) {
-                return player.id;
-            }
-        }
-        // Fallback for the host before the game state is initialized.
-        if (isHost) return 'player-1';
-
-        return null;
-    }, [devPlayerViewId, isHost, gameState.players, playerName]);
-
-    const addToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
-        const id = `${Date.now()}-${Math.random()}`;
-        setToasts(prev => [...prev, { id, message, type }]);
-    }, []);
-
-    const dismissToast = (id: string) => {
-        setToasts(prev => prev.filter(toast => toast.id !== id));
-    };
-
-    const broadcastMessage = useCallback((message: PeerMessage) => {
-        Object.values(connectionsRef.current).forEach(conn => {
-            conn.send(message);
-        });
-    }, []);
-
-    const checkServerStatus = useCallback(() => {
-        if (!PEER_SERVER_HOST) {
-            setServerStatus('local');
-            return;
-        }
-    
-        setServerStatus('checking');
-        setError(null);
-    
-        let tempPeer: Peer | null = null;
-        const timer = setTimeout(() => {
-            if (tempPeer) {
-                tempPeer.destroy();
-            }
-            setServerStatus('offline');
-            setError('El servidor no responde. Revisa la URL o inténtalo más tarde.');
-        }, 8000); // 8-second timeout
-    
-        try {
-            const peerConfig = {
-                host: PEER_SERVER_HOST,
-                path: '/peerjs',
-                secure: true,
-                config: { 'iceServers': [] } // Skip STUN for a faster check
-            };
-            const randomId = `bancomaton-check-${Math.random().toString(36).substring(2, 9)}`;
-            tempPeer = new Peer(randomId, peerConfig);
-    
-            tempPeer.on('open', () => {
-                clearTimeout(timer);
-                setServerStatus('online');
-                tempPeer?.destroy();
-            });
-    
-            tempPeer.on('error', (err) => {
-                clearTimeout(timer);
-                setServerStatus('offline');
-                if (err.type === 'peer-unavailable') {
-                    setError('El servidor de señalización no está disponible en la URL proporcionada.');
-                } else {
-                    setError(`Error de conexión: ${err.message}`);
-                }
-                tempPeer?.destroy();
-            });
-        } catch (e) {
-            clearTimeout(timer);
-            setServerStatus('offline');
-            setError('No se pudo inicializar el cliente de conexión.');
-        }
-    }, []);
-
-    useEffect(() => {
-        if (PEER_SERVER_HOST) {
-            checkServerStatus();
-        }
-    }, [checkServerStatus]);
-    
-    useEffect(() => {
-        if(isHost && gameState.players.length > 0) {
-            broadcastMessage({ type: 'STATE_UPDATE', payload: gameState });
-        }
-    }, [gameState, isHost, broadcastMessage]);
-
-    const handleClientRequest = useCallback((request: {requesterId: string, action: GameAction}) => {
-         const requester = gameState.players.find(p => p.id === request.requesterId);
-         if (!requester) return;
-
-         let message = '';
-         const {type, payload} = request.action;
-         const prop = 'propertyId' in payload ? PROPERTIES.find(p => p.id === payload.propertyId) : undefined;
-
-         switch (type) {
-            case 'TRANSFER_MONEY':
-                const toPlayer = gameState.players.find(p => p.id === payload.toId);
-                const toName = payload.toId === BANK_ID ? 'el Banco' : toPlayer?.name || 'Jugador';
-                const amount = payload.amount;
-                const absAmount = Math.abs(amount).toLocaleString();
-
-                if (payload.fromId.startsWith('player-') && payload.toId.startsWith('player-')) { // Player to Player
-                     message = `${requester.name} solicita pagar $${absAmount} a ${toName}.`;
-                } else if (amount > 0) {
-                    message = `${requester.name} solicita pagar $${absAmount} a ${toName}.`;
-                } else {
-                    message = `${requester.name} solicita cobrar $${absAmount} de ${toName}.`;
-                }
-                break;
-            case 'BUILD_HOUSE':
-                const buildingCount = requester.buildings[payload.propertyId] || 0;
-                const buildingType = buildingCount < 4 ? 'una casa' : 'un hotel';
-                message = `${requester.name} solicita construir ${buildingType} en ${prop?.name}.`;
-                break;
-            case 'MORTGAGE_PROPERTY':
-                message = `${requester.name} solicita hipotecar ${prop?.name}.`;
-                break;
-            case 'UNMORTGAGE_PROPERTY':
-                message = `${requester.name} solicita pagar la hipoteca de ${prop?.name}.`;
-                break;
-            default:
-                return;
-         }
-
-         const newAction: PendingAction = {
-            id: `${Date.now()}`,
-            requesterId: request.requesterId,
-            requesterName: requester.name,
-            message,
-            action: request.action,
-         };
-         setPendingActions(prev => [...prev, newAction]);
-    }, [gameState.players]);
-
-    const getPeerConfig = (id?: string) => {
-      if (!PEER_SERVER_HOST) {
-          console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
-          if (id) return new Peer(id);
-          return new Peer();
-      }
-
-      const peerConfig = {
-          host: PEER_SERVER_HOST,
-          path: '/peerjs',
-          secure: true,
-          config: {
-              'iceServers': [
-                  { urls: 'stun:stun.l.google.com:19302' },
-                  { urls: 'stun:stun1.l.google.com:19302' },
-              ]
-          }
-      };
-      
-      if (id) return new Peer(id, peerConfig);
-      return new Peer(peerConfig);
-    };
-
-    const initializePeer = () => {
-        const peer = getPeerConfig();
-        peerRef.current = peer;
-
-        peer.on('open', (peerId) => {
-            setHostId(peerId);
-            setIsHost(true);
-            dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: [playerName] } });
-            setView('game');
-        });
-
-        peer.on('connection', (conn) => {
-            connectionsRef.current[conn.peer] = conn;
-            conn.on('data', (data: any) => {
-                const message = data as PeerMessage;
-                if (isHost) {
-                    if (message.type === 'JOIN_REQUEST') {
-                        if (gameState.players.length < MAX_PLAYERS) {
-                            dispatch({ type: 'ADD_PLAYER', payload: { playerName: message.payload.name } });
-                            addToast(`${message.payload.name} se ha unido.`, 'success');
-                        } else {
-                            console.log("Juego lleno, rechazando jugador.");
-                        }
-                    } else if (message.type === 'HOST_ACTION_REQUEST') {
-                        handleClientRequest(message.payload);
-                    }
-                }
-            });
-             conn.on('close', () => {
-                delete connectionsRef.current[conn.peer];
-            });
-        });
-
-        peer.on('error', (err) => {
-            setError(`Error de conexión: ${err.message}. Intenta de nuevo.`);
-            setView('home');
-        });
-    };
-
-    const createGame = () => {
-        if (!playerName) {
-            setError('Por favor, introduce tu nombre.');
-            return;
-        }
-        setError(null);
-        initializePeer();
-    };
-
-    const joinGame = () => {
-        if (!playerName) { setError('Por favor, introduce tu nombre.'); return; }
-        if (!hostId) { setError('Por favor, introduce el ID de la partida.'); return; }
-        
-        setError(null);
-        const peer = getPeerConfig(); // Guests don't need a specific ID
-        peerRef.current = peer;
-
-        peer.on('open', () => {
-            const stableHostId = hostId;
-            if (!stableHostId) {
-                setError(`No se pudo conectar al ID. Verifica que sea correcto.`);
-                setView('home');
-                return;
-            }
-            const conn = peer.connect(stableHostId);
-            if (!conn) {
-                setError(`No se pudo conectar al ID: ${stableHostId}. Verifica que sea correcto.`);
-                setView('home');
-                return;
-            }
-            connectionsRef.current[stableHostId] = conn;
-            conn.on('open', () => conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } }));
-            conn.on('data', (data: any) => {
-                const message = data as PeerMessage;
-                if (message.type === 'STATE_UPDATE') {
-                    dispatch({ type: 'SET_STATE', payload: message.payload });
-                    if(!['game', 'board'].includes(view)) setView('game');
-                } else if (message.type === 'ACTION_RESPONSE') {
-                    if (message.payload.requesterId === myPlayerId) {
-                        addToast(message.payload.message, message.payload.success ? 'success' : 'error');
-                    }
-                }
-            });
-        });
-         peer.on('error', (err) => { setError(`Error al unirse: ${err.message}. Verifica el ID.`); setView('home'); });
-    };
-    
-    const enterDevMode = () => {
-        const devPlayers = ['Anfitrión (Dev)', 'Invitado 1 (Dev)', 'Invitado 2 (Dev)'];
-        dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: devPlayers } });
-        setIsHost(true);
-        setDevPlayerViewId('player-1');
-        setView('game');
-    };
-    
-    const sendRequestToHost = (action: GameAction) => {
-        if (!myPlayerId) {
-            addToast("Error: No se pudo identificar al jugador.", "error");
-            return;
-        }
-        const conn = connectionsRef.current[hostId];
-        if (conn) {
-            conn.send({type: 'HOST_ACTION_REQUEST', payload: { requesterId: myPlayerId, action }});
-        }
-    };
-    
-    const simulateRequestInDevMode = (action: GameAction) => {
-        handleClientRequest({ requesterId: devPlayerViewId!, action });
+const ServerStatusIndicator = ({ serverStatus, error, onRetry }: { serverStatus: ServerStatus, error: string | null, onRetry: () => void }) => {
+    switch (serverStatus) {
+        case 'checking':
+            return (
+                <div className="flex items-center justify-center gap-2 text-slate-400 p-3 rounded-md bg-slate-800/50">
+                    <SpinnerIcon className="w-5 h-5" />
+                    <span>Conectando al servidor...</span>
+                </div>
+            );
+        case 'online':
+             return (
+                <div className="flex items-center justify-center gap-2 text-green-300 p-3 rounded-md bg-green-500/20">
+                    <CheckCircleIcon className="w-5 h-5" />
+                    <span>Servidor en línea</span>
+                </div>
+            );
+        case 'offline':
+            return (
+                <div className="text-center">
+                     <div className="flex items-center justify-center gap-2 text-red-300 p-3 rounded-md bg-red-500/20 border border-red-400/50">
+                        <XCircleIcon className="w-6 h-6 flex-shrink-0" />
+                        <span className="text-left">{error || 'Error de conexión con el servidor'}</span>
+                    </div>
+                    <button onClick={onRetry} className="mt-2 text-sm text-teal-400 hover:text-teal-300 font-semibold">Reintentar</button>
+                </div>
+            );
+        case 'local':
+             return (
+                <div className="flex items-center justify-center gap-2 text-sky-300 p-3 rounded-md bg-sky-500/20">
+                    <CheckCircleIcon className="w-5 h-5" />
+                    <span>Modo desarrollador local</span>
+                </div>
+            );
+        default:
+            return null;
     }
+};
 
-    const handleApproveAction = (actionId: string) => {
-        const pending = pendingActions.find(p => p.id === actionId);
-        if (pending) {
-            dispatch(pending.action);
-            const payload = { requesterId: pending.requesterId, success: true, message: '¡Solicitud aprobada!' };
-            broadcastMessage({ type: 'ACTION_RESPONSE', payload });
+const DevPlayerSwitcher = ({ players, devPlayerViewId, onSetDevPlayerViewId }: { players: Player[], devPlayerViewId: string | null, onSetDevPlayerViewId: (id: string) => void }) => (
+    <div className="absolute top-2 right-2 bg-slate-700/80 backdrop-blur-sm p-1 rounded-md text-xs flex gap-1 z-10 border border-slate-600">
+        {players.map((p: Player) => (
+            <button 
+                key={p.id}
+                onClick={() => onSetDevPlayerViewId(p.id)}
+                className={`px-2 py-1 rounded ${devPlayerViewId === p.id ? 'bg-teal-500 font-bold' : 'bg-slate-600 hover:bg-slate-500'}`}
+            >
+                {p.name.split(' ')[0]}
+            </button>
+        ))}
+    </div>
+);
 
-            if (devPlayerViewId && devPlayerViewId === pending.requesterId) {
-                addToast(payload.message, 'success');
-            }
-            
-            setPendingActions(prev => prev.filter(p => p.id !== actionId));
-        }
-    };
+const HistoryLog = ({ history }: { history: HistoryEntry[] }) => (
+    <Card className="mt-4">
+        <h3 className="text-xl font-bold mb-3 flex items-center gap-2"><HistoryIcon className="w-6 h-6" /> Historial de Actividad</h3>
+        <div className="max-h-48 overflow-y-auto space-y-2 pr-2">
+            {history.slice().reverse().map(entry => (
+                <div key={entry.id} className="text-sm text-slate-300 bg-slate-800/50 p-2 rounded-md font-mono">
+                   <span className="text-slate-500">{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}:</span> {entry.message}
+                </div>
+            ))}
+        </div>
+    </Card>
+);
 
-    const handleDenyAction = (actionId: string) => {
-        const pending = pendingActions.find(p => p.id === actionId);
-        if (pending) {
-            const payload = { requesterId: pending.requesterId, success: false, message: 'Solicitud rechazada.' };
-            broadcastMessage({ type: 'ACTION_RESPONSE', payload });
+const NetWorthIndicator = ({ gameState, propertiesData }: { gameState: GameState, propertiesData: Record<string, Property> }) => {
+    const netWorths = useMemo(() => {
+        return gameState.players.map(player => {
+            const propertiesValue = player.properties.reduce((sum, propId) => {
+                const propData = propertiesData[propId];
+                if (!propData) return sum;
+                const isMortgaged = gameState.properties[propId]?.mortgaged;
+                let value = isMortgaged && propData.price ? propData.price / 2 : propData.price || 0;
 
-            if (devPlayerViewId && devPlayerViewId === pending.requesterId) {
-                addToast(payload.message, 'error');
-            }
-
-            setPendingActions(prev => prev.filter(p => p.id !== actionId));
-        }
-    };
-
-    const propertiesData = useMemo(() => BOARD_SQUARES.reduce((acc, p) => { acc[p.id] = p; return acc; }, {} as Record<string, Property>), []);
-    const selectedProperty = useMemo(() => {
-        if (!selectedPropertyId) return null;
-        return propertiesData[selectedPropertyId];
-    }, [selectedPropertyId, propertiesData]);
-
-
-    const renderView = () => {
-        switch (view) {
-            case 'game':
-                const myPlayer = gameState.players.find(p => p.id === myPlayerId);
-                
-                let playerRequestAction;
-                if(devPlayerViewId) {
-                    playerRequestAction = simulateRequestInDevMode;
-                } else if (!isHost) {
-                    playerRequestAction = sendRequestToHost;
+                const buildings = player.buildings[propId] || 0;
+                if (buildings > 0 && propData.houseCost) {
+                    value += buildings * propData.houseCost;
                 }
+                return sum + value;
+            }, 0);
+            return { playerId: player.id, name: player.name, netWorth: player.money + propertiesValue };
+        });
+    }, [gameState, propertiesData]);
 
-                return <GameScreen 
-                    gameState={gameState} 
-                    myPlayer={myPlayer} 
-                    isHost={isHost}
-                    hostId={hostId}
-                    onPlayerRequestAction={playerRequestAction}
-                    onHostDirectAction={dispatch}
-                    pendingActions={pendingActions}
-                    onApprove={handleApproveAction}
-                    onDeny={handleDenyAction}
-                    devPlayerViewId={devPlayerViewId}
-                    onSetDevPlayerViewId={setDevPlayerViewId}
-                    onNavigateToBoard={() => setView('board')}
-                    setSelectedPropertyId={setSelectedPropertyId}
-                    />;
-            case 'board':
-                 return <BoardScreen 
-                    gameState={gameState} 
-                    onNavigateToGame={() => setView('game')} 
-                    setSelectedPropertyId={setSelectedPropertyId}
-                    propertiesData={propertiesData}
-                />;
-            case 'home':
-            default:
-                return <HomeScreen 
-                    playerName={playerName} 
-                    onPlayerNameChange={setPlayerName}
-                    hostId={hostId}
-                    onHostIdChange={setHostId}
-                    onCreateGame={createGame}
-                    onJoinGame={joinGame}
-                    onDevMode={enterDevMode}
-                    error={error}
-                    serverStatus={serverStatus}
-                    onRetry={checkServerStatus}
-                />;
-        }
-    };
+    const totalNetWorth = netWorths.reduce((sum, p) => sum + p.netWorth, 0);
+    if (totalNetWorth === 0) return null;
 
-    const myPlayerForModal = gameState.players.find(p => p.id === myPlayerId);
-    let playerRequestActionForModal;
-    if (devPlayerViewId) {
-        playerRequestActionForModal = simulateRequestInDevMode;
-    } else if (!isHost) {
-        playerRequestActionForModal = sendRequestToHost;
+    const formatNetWorth = (value: number) => {
+        if (value >= 1000) return `$${(value / 1000).toFixed(1)}k`;
+        return `$${value}`;
     }
-
+    
     return (
-        <div className="min-h-screen bg-slate-900 text-white container mx-auto p-2 sm:p-4 flex flex-col items-center justify-center">
-            <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-            {renderView()}
-            {selectedProperty && myPlayerForModal && (
-                <PropertyDetailModal 
-                    isOpen={!!selectedPropertyId} 
-                    onClose={() => setSelectedPropertyId(null)} 
-                    property={selectedProperty} 
-                    myPlayer={myPlayerForModal} 
-                    gameState={gameState} 
-                    onPlayerRequestAction={playerRequestActionForModal}
-                    propertiesData={propertiesData} 
-                    addToast={addToast} 
-                />
-            )}
+        <div className="w-full max-w-4xl mx-auto mt-4">
+            <h3 className="text-xl font-bold text-center mb-3">Patrimonio Neto</h3>
+            <div className="flex w-full h-16 bg-slate-800 rounded-lg overflow-hidden border border-slate-700">
+                {netWorths.map((playerData, index) => (
+                    <div
+                        key={playerData.playerId}
+                        style={{ width: `${(playerData.netWorth / totalNetWorth) * 100}%`, backgroundColor: PLAYER_COLORS[index] }}
+                        className="flex items-center justify-center transition-all duration-500"
+                    >
+                       <span className="font-bold text-lg" style={{ color: getTextColorForBg(PLAYER_COLORS[index])}}>{formatNetWorth(playerData.netWorth)}</span>
+                    </div>
+                ))}
+            </div>
         </div>
     );
 };
 
+
 // --- View Components ---
 
-const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, error, serverStatus, onRetry }: any) => {
+const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, error, serverStatus, onRetry, onOpenScanner }: any) => {
     
     const isInteractive = serverStatus === 'online' || serverStatus === 'local';
-
-    const ServerStatusIndicator = () => {
-        switch (serverStatus) {
-            case 'checking':
-                return (
-                    <div className="flex items-center justify-center gap-2 text-slate-400 p-3 rounded-md bg-slate-800/50">
-                        <SpinnerIcon className="w-5 h-5" />
-                        <span>Conectando al servidor...</span>
-                    </div>
-                );
-            case 'online':
-                 return (
-                    <div className="flex items-center justify-center gap-2 text-green-300 p-3 rounded-md bg-green-500/20">
-                        <CheckCircleIcon className="w-5 h-5" />
-                        <span>Servidor en línea</span>
-                    </div>
-                );
-            case 'offline':
-                return (
-                    <div className="text-center">
-                         <div className="flex items-center justify-center gap-2 text-red-300 p-3 rounded-md bg-red-500/20 border border-red-400/50">
-                            <XCircleIcon className="w-6 h-6 flex-shrink-0" />
-                            <span className="text-left">{error || 'Error de conexión con el servidor'}</span>
-                        </div>
-                        <button onClick={onRetry} className="mt-2 text-sm text-teal-400 hover:text-teal-300 font-semibold">Reintentar</button>
-                    </div>
-                );
-            case 'local':
-                 return (
-                    <div className="flex items-center justify-center gap-2 text-sky-300 p-3 rounded-md bg-sky-500/20">
-                        <CheckCircleIcon className="w-5 h-5" />
-                        <span>Modo desarrollador local</span>
-                    </div>
-                );
-            default:
-                return null;
-        }
-    };
     
     return (
     <Card className="w-full max-w-md">
@@ -522,7 +194,7 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
         <p className="text-slate-400 text-center mb-6">Tu banca digital para juegos de mesa</p>
         
         <div className="mb-4">
-            <ServerStatusIndicator />
+            <ServerStatusIndicator serverStatus={serverStatus} error={error} onRetry={onRetry} />
         </div>
 
         {error && serverStatus === 'online' && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
@@ -548,14 +220,23 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
                 <span className="text-slate-500">O</span>
                 <hr className="flex-grow border-slate-700"/>
             </div>
-
-            <input 
-                type="text" 
-                value={hostId}
-                onChange={(e) => onHostIdChange(e.target.value)}
-                placeholder="ID de la partida"
-                className="w-full bg-slate-900 border border-slate-700 rounded-md px-4 py-2 focus:ring-2 focus:ring-teal-500 focus:outline-none"
-            />
+            <div className="flex gap-2">
+                <input 
+                    type="text" 
+                    value={hostId}
+                    onChange={(e) => onHostIdChange(e.target.value)}
+                    placeholder="ID de la partida"
+                    className="flex-grow w-full bg-slate-900 border border-slate-700 rounded-md px-4 py-2 focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                />
+                 <button 
+                    onClick={onOpenScanner}
+                    disabled={!isInteractive} 
+                    className="bg-slate-700 hover:bg-slate-600 p-3 rounded-md font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
+                    aria-label="Escanear código QR"
+                >
+                    <QRIcon className="w-6 h-6"/>
+                </button>
+            </div>
             <button 
                 onClick={onJoinGame}
                 disabled={!isInteractive} 
@@ -571,28 +252,96 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
     </Card>
 )};
 
-const ShareGameID = ({ hostId }: { hostId: string }) => {
+const ShareModal = ({ isOpen, onClose, hostId }: { isOpen: boolean, onClose: () => void, hostId: string }) => {
     const [copied, setCopied] = useState(false);
 
     const copyToClipboard = () => {
+        if (!hostId) return;
         navigator.clipboard.writeText(hostId).then(() => {
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         });
     };
+    
+    if (!isOpen) return null;
 
     return (
-        <div className="absolute top-2 left-2 bg-slate-700/80 backdrop-blur-sm p-2 rounded-lg text-sm flex items-center gap-2 z-10 shadow-lg border border-slate-600">
-            <span className="font-bold text-slate-300">ID de Partida:</span>
-            <span className="font-mono text-teal-300 bg-slate-900 px-2 py-1 rounded">{hostId}</span>
-            <button onClick={copyToClipboard} className="bg-teal-600 hover:bg-teal-500 px-2 py-1 rounded-md font-semibold text-xs transition-colors w-20">
-                {copied ? '¡Copiado!' : 'Copiar'}
-            </button>
-        </div>
+        <Modal isOpen={isOpen} onClose={onClose} title="Invitar Jugadores">
+            <div className="flex flex-col items-center gap-4 text-center">
+                <p className="text-slate-300">Otros jugadores pueden unirse con este ID o escaneando el código.</p>
+                <div className="w-full bg-slate-900 p-3 rounded-lg flex items-center justify-between gap-2 border border-slate-700">
+                     <span className="font-mono text-lg text-teal-300 truncate">{hostId}</span>
+                     <button onClick={copyToClipboard} className="bg-teal-600 hover:bg-teal-500 px-3 py-1.5 rounded-md font-semibold text-sm transition-colors w-24 flex-shrink-0">
+                        {copied ? '¡Copiado!' : 'Copiar'}
+                     </button>
+                </div>
+                {hostId && (
+                    <div className="bg-white p-4 rounded-lg mt-2">
+                        <QRCodeSVG value={hostId} size={256} level="H" />
+                    </div>
+                )}
+            </div>
+        </Modal>
     );
 };
 
-const GameScreen = ({ gameState, myPlayer, isHost, hostId, onPlayerRequestAction, onHostDirectAction, pendingActions, onApprove, onDeny, devPlayerViewId, onSetDevPlayerViewId, onNavigateToBoard, setSelectedPropertyId }: any) => {
+const QRScannerModal: React.FC<{ isOpen: boolean; onClose: () => void; onScanSuccess: (result: string | null) => void; }> = ({ isOpen, onClose, onScanSuccess }) => {
+    const onScanSuccessRef = useRef(onScanSuccess);
+    onScanSuccessRef.current = onScanSuccess;
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+
+        const scannerId = "qr-reader-container";
+        const scanner = new Html5QrcodeScanner(
+            scannerId,
+            {
+                fps: 10,
+                qrbox: { width: 250, height: 250 },
+                supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA],
+            },
+            false
+        );
+
+        const handleSuccess = (decodedText: string) => {
+            onScanSuccessRef.current(decodedText);
+        };
+
+        const handleError = (errorMessage: string) => {
+            // This callback fires every frame that a QR code is not found.
+            // We can safely ignore it.
+        };
+
+        const qrReaderElement = document.getElementById(scannerId);
+        if (qrReaderElement) {
+            scanner.render(handleSuccess, handleError);
+        }
+
+        return () => {
+            if (scanner && typeof scanner.clear === 'function') {
+                scanner.clear().catch(error => {
+                    // This can happen if the component unmounts before scanner is fully initialized
+                    // or if it's already cleared. It's safe to ignore.
+                });
+            }
+        };
+    }, [isOpen]);
+
+    if (!isOpen) {
+        return null;
+    }
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Escanear Código QR">
+            <div id="qr-reader-container" className="w-full bg-slate-900 rounded-lg overflow-hidden" />
+            <p className="text-center text-slate-400 p-4">Apunta la cámara al código QR del anfitrión.</p>
+        </Modal>
+    );
+};
+
+const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHostDirectAction, pendingActions, onApprove, onDeny, devPlayerViewId, onSetDevPlayerViewId, onNavigateToBoard, setSelectedPropertyId, onOpenShareModal }: any) => {
     const [isPayModalOpen, setPayModalOpen] = useState(false);
     const [isHostPanelOpen, setHostPanelOpen] = useState(false);
     
@@ -624,33 +373,6 @@ const GameScreen = ({ gameState, myPlayer, isHost, hostId, onPlayerRequestAction
         }
     };
     
-    const DevPlayerSwitcher = () => (
-        <div className="absolute top-2 right-2 bg-slate-700/80 backdrop-blur-sm p-1 rounded-md text-xs flex gap-1 z-10 border border-slate-600">
-            {gameState.players.map((p: Player) => (
-                <button 
-                    key={p.id}
-                    onClick={() => onSetDevPlayerViewId(p.id)}
-                    className={`px-2 py-1 rounded ${devPlayerViewId === p.id ? 'bg-teal-500 font-bold' : 'bg-slate-600 hover:bg-slate-500'}`}
-                >
-                    {p.name.split(' ')[0]}
-                </button>
-            ))}
-        </div>
-    );
-    
-    const HistoryLog = ({ history }: { history: HistoryEntry[] }) => (
-        <Card className="mt-4">
-            <h3 className="text-xl font-bold mb-3 flex items-center gap-2"><HistoryIcon className="w-6 h-6" /> Historial de Actividad</h3>
-            <div className="max-h-48 overflow-y-auto space-y-2 pr-2">
-                {history.slice().reverse().map(entry => (
-                    <div key={entry.id} className="text-sm text-slate-300 bg-slate-800/50 p-2 rounded-md font-mono">
-                       <span className="text-slate-500">{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}:</span> {entry.message}
-                    </div>
-                ))}
-            </div>
-        </Card>
-    );
-
     const hasPendingActions = pendingActions.length > 0;
     const bankButtonClasses = hasPendingActions
       ? 'bg-yellow-600 hover:bg-yellow-500 animate-pulse'
@@ -658,8 +380,7 @@ const GameScreen = ({ gameState, myPlayer, isHost, hostId, onPlayerRequestAction
 
     return (
         <div className="w-full max-w-4xl mx-auto relative">
-             {devPlayerViewId && <DevPlayerSwitcher />}
-             {isHost && hostId && !devPlayerViewId && <ShareGameID hostId={hostId} />}
+             {devPlayerViewId && <DevPlayerSwitcher players={gameState.players} devPlayerViewId={devPlayerViewId} onSetDevPlayerViewId={onSetDevPlayerViewId} />}
 
             <Card className="mb-4">
                 <div className="flex justify-between items-center flex-wrap gap-2">
@@ -668,6 +389,11 @@ const GameScreen = ({ gameState, myPlayer, isHost, hostId, onPlayerRequestAction
                         <p className="text-3xl font-light text-teal-400 flex items-center gap-2"><MoneyIcon className="w-7 h-7" /> ${myPlayer.money.toLocaleString()}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                        {isHost && !devPlayerViewId && (
+                            <button onClick={onOpenShareModal} className="bg-green-600 hover:bg-green-500 px-4 py-2 rounded-md font-semibold flex items-center gap-2">
+                                <QRIcon className="w-5 h-5"/> Compartir / QR
+                            </button>
+                        )}
                         <button onClick={onNavigateToBoard} className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-md font-semibold flex items-center gap-2">
                             <MapIcon className="w-5 h-5"/> Tablero
                         </button>
@@ -782,51 +508,6 @@ const BoardScreen = ({ gameState, onNavigateToGame, setSelectedPropertyId, prope
         return { ...player, color: PLAYER_COLORS[playerIndex] };
     };
 
-    const NetWorthIndicator = () => {
-        const netWorths = useMemo(() => {
-            return gameState.players.map(player => {
-                const propertiesValue = player.properties.reduce((sum, propId) => {
-                    const propData = propertiesData[propId];
-                    if (!propData) return sum;
-                    const isMortgaged = gameState.properties[propId]?.mortgaged;
-                    let value = isMortgaged && propData.price ? propData.price / 2 : propData.price || 0;
-
-                    const buildings = player.buildings[propId] || 0;
-                    if (buildings > 0 && propData.houseCost) {
-                        value += buildings * propData.houseCost;
-                    }
-                    return sum + value;
-                }, 0);
-                return { playerId: player.id, name: player.name, netWorth: player.money + propertiesValue };
-            });
-        }, [gameState, propertiesData]);
-
-        const totalNetWorth = netWorths.reduce((sum, p) => sum + p.netWorth, 0);
-        if (totalNetWorth === 0) return null;
-
-        const formatNetWorth = (value: number) => {
-            if (value >= 1000) return `$${(value / 1000).toFixed(1)}k`;
-            return `$${value}`;
-        }
-        
-        return (
-            <div className="w-full max-w-4xl mx-auto mt-4">
-                <h3 className="text-xl font-bold text-center mb-3">Patrimonio Neto</h3>
-                <div className="flex w-full h-16 bg-slate-800 rounded-lg overflow-hidden border border-slate-700">
-                    {netWorths.map((playerData, index) => (
-                        <div
-                            key={playerData.playerId}
-                            style={{ width: `${(playerData.netWorth / totalNetWorth) * 100}%`, backgroundColor: PLAYER_COLORS[index] }}
-                            className="flex items-center justify-center transition-all duration-500"
-                        >
-                           <span className="font-bold text-lg" style={{ color: getTextColorForBg(PLAYER_COLORS[index])}}>{formatNetWorth(playerData.netWorth)}</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
     return (
         <div className="w-full flex flex-col items-center">
              <div className="w-full max-w-4xl flex justify-end mb-2">
@@ -878,7 +559,7 @@ const BoardScreen = ({ gameState, onNavigateToGame, setSelectedPropertyId, prope
                     <h1 className="text-5xl font-black text-teal-500 transform -rotate-45">Bancomatón</h1>
                 </div>
             </div>
-            <NetWorthIndicator />
+            <NetWorthIndicator gameState={gameState} propertiesData={propertiesData} />
         </div>
     );
 };
@@ -909,17 +590,17 @@ const PropertyDetailModal = ({ isOpen, onClose, property, myPlayer, gameState, o
 
         let rentAmount = 0;
         if(property.rent){
+            const owner = gameState.players.find(p => p.id === propertyState.ownerId);
+            if (!owner) return; // safety check
+            
             switch (property.type) {
                 case 'street':
                     rentAmount = property.rent[buildings];
                     break;
                 case 'railroad':
-                    const owner = gameState.players.find(p => p.id === propertyState.ownerId);
-                    if (owner) {
-                        const ownedRailroads = owner.properties.filter(pId => propertiesData[pId].type === 'railroad').length;
-                        if (ownedRailroads > 0 && ownedRailroads <= property.rent.length) {
-                           rentAmount = property.rent[ownedRailroads - 1];
-                        }
+                    const ownedRailroads = owner.properties.filter(pId => propertiesData[pId].type === 'railroad').length;
+                    if (ownedRailroads > 0 && ownedRailroads <= property.rent.length) {
+                       rentAmount = property.rent[ownedRailroads - 1];
                     }
                     break;
                 case 'utility':
@@ -928,13 +609,10 @@ const PropertyDetailModal = ({ isOpen, onClose, property, myPlayer, gameState, o
                         addToast('Por favor, introduce una tirada de dados válida (2-12).', 'error');
                         return;
                     }
-                    const ownerUtil = gameState.players.find(p => p.id === propertyState.ownerId);
-                    if (ownerUtil) {
-                        const ownedUtilities = ownerUtil.properties.filter(pId => propertiesData[pId].type === 'utility').length;
-                        if (ownedUtilities > 0 && ownedUtilities <= property.rent.length) {
-                            const multiplier = property.rent[ownedUtilities - 1];
-                            rentAmount = multiplier * parsedDiceRoll;
-                        }
+                    const ownedUtilities = owner.properties.filter(pId => propertiesData[pId].type === 'utility').length;
+                    if (ownedUtilities > 0 && ownedUtilities <= property.rent.length) {
+                        const multiplier = property.rent[ownedUtilities - 1];
+                        rentAmount = multiplier * parsedDiceRoll;
                     }
                     break;
             }
@@ -1217,6 +895,431 @@ const HostControlPanel = ({ isOpen, onClose, pendingActions, onApprove, onDeny, 
                 </div>
              )}
         </Modal>
+    );
+};
+
+
+// --- Main App Component ---
+const App: React.FC = () => {
+    const [view, setView] = useState<View>('home');
+    const [playerName, setPlayerName] = useState('');
+    const [isHost, setIsHost] = useState(false);
+    const [hostId, setHostId] = useState('');
+    const [error, setError] = useState<string | null>(null);
+    const [devPlayerViewId, setDevPlayerViewId] = useState<string | null>(null);
+    const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
+    const [toasts, setToasts] = useState<ToastData[]>([]);
+    const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
+    const [serverStatus, setServerStatus] = useState<ServerStatus>(!PEER_SERVER_HOST ? 'local' : 'checking');
+    const [isScannerOpen, setScannerOpen] = useState(false);
+    const [isShareModalOpen, setShareModalOpen] = useState(false);
+
+
+    const peerRef = useRef<Peer | null>(null);
+    const connectionsRef = useRef<Record<string, DataConnection>>({});
+    const { gameState, dispatch } = useGameEngine();
+    
+    const myPlayerId = useMemo(() => {
+        if (devPlayerViewId) return devPlayerViewId;
+        // For real games (host or client) find the player by name.
+        if (gameState.players && playerName) {
+            const player = gameState.players.find(p => p.name === playerName);
+            if (player) {
+                return player.id;
+            }
+        }
+        // Fallback for the host before the game state is initialized.
+        if (isHost) return 'player-1';
+
+        return null;
+    }, [devPlayerViewId, isHost, gameState.players, playerName]);
+
+    const addToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+        const id = `${Date.now()}-${Math.random()}`;
+        setToasts(prev => [...prev, { id, message, type }]);
+    }, []);
+
+    const dismissToast = (id: string) => {
+        setToasts(prev => prev.filter(toast => toast.id !== id));
+    };
+
+    const broadcastMessage = useCallback((message: PeerMessage) => {
+        Object.values(connectionsRef.current).forEach(conn => {
+            conn.send(message);
+        });
+    }, []);
+
+    const checkServerStatus = useCallback(() => {
+        if (!PEER_SERVER_HOST) {
+            setServerStatus('local');
+            return;
+        }
+    
+        setServerStatus('checking');
+        setError(null);
+    
+        let tempPeer: Peer | null = null;
+        const timer = setTimeout(() => {
+            if (tempPeer) {
+                tempPeer.destroy();
+            }
+            setServerStatus('offline');
+            setError('El servidor no responde. Revisa la URL o inténtalo más tarde.');
+        }, 8000); // 8-second timeout
+    
+        try {
+            const peerConfig = {
+                host: PEER_SERVER_HOST,
+                path: '/peerjs',
+                secure: true,
+                config: { 'iceServers': [] } // Skip STUN for a faster check
+            };
+            const randomId = `bancomaton-check-${Math.random().toString(36).substring(2, 9)}`;
+            tempPeer = new Peer(randomId, peerConfig);
+    
+            tempPeer.on('open', () => {
+                clearTimeout(timer);
+                setServerStatus('online');
+                tempPeer?.destroy();
+            });
+    
+            tempPeer.on('error', (err) => {
+                clearTimeout(timer);
+                setServerStatus('offline');
+                if (err.type === 'peer-unavailable') {
+                    setError('El servidor de señalización no está disponible en la URL proporcionada.');
+                } else {
+                    setError(`Error de conexión: ${err.message}`);
+                }
+                tempPeer?.destroy();
+            });
+        } catch (e) {
+            clearTimeout(timer);
+            setServerStatus('offline');
+            setError('No se pudo inicializar el cliente de conexión.');
+        }
+    }, []);
+
+    useEffect(() => {
+        if (PEER_SERVER_HOST) {
+            checkServerStatus();
+        }
+    }, [checkServerStatus]);
+    
+    useEffect(() => {
+        if(isHost && gameState.players.length > 0) {
+            broadcastMessage({ type: 'STATE_UPDATE', payload: gameState });
+        }
+    }, [gameState, isHost, broadcastMessage]);
+
+    const handleClientRequest = useCallback((request: {requesterId: string, action: GameAction}) => {
+         const requester = gameState.players.find(p => p.id === request.requesterId);
+         if (!requester) return;
+
+         let message = '';
+         const {type, payload} = request.action;
+         const prop = 'propertyId' in payload ? PROPERTIES.find(p => p.id === payload.propertyId) : undefined;
+
+         switch (type) {
+            case 'TRANSFER_MONEY':
+                const toPlayer = gameState.players.find(p => p.id === payload.toId);
+                const toName = payload.toId === BANK_ID ? 'el Banco' : toPlayer?.name || 'Jugador';
+                const amount = payload.amount;
+                const absAmount = Math.abs(amount).toLocaleString();
+
+                if (payload.fromId.startsWith('player-') && payload.toId.startsWith('player-')) { // Player to Player
+                     message = `${requester.name} solicita pagar $${absAmount} a ${toName}.`;
+                } else if (amount > 0) {
+                    message = `${requester.name} solicita pagar $${absAmount} a ${toName}.`;
+                } else {
+                    message = `${requester.name} solicita cobrar $${absAmount} de ${toName}.`;
+                }
+                break;
+            case 'BUILD_HOUSE':
+                const buildingCount = requester.buildings[payload.propertyId] || 0;
+                const buildingType = buildingCount < 4 ? 'una casa' : 'un hotel';
+                message = `${requester.name} solicita construir ${buildingType} en ${prop?.name}.`;
+                break;
+            case 'MORTGAGE_PROPERTY':
+                message = `${requester.name} solicita hipotecar ${prop?.name}.`;
+                break;
+            case 'UNMORTGAGE_PROPERTY':
+                message = `${requester.name} solicita pagar la hipoteca de ${prop?.name}.`;
+                break;
+            default:
+                return;
+         }
+
+         const newAction: PendingAction = {
+            id: `${Date.now()}`,
+            requesterId: request.requesterId,
+            requesterName: requester.name,
+            message,
+            action: request.action,
+         };
+         setPendingActions(prev => [...prev, newAction]);
+    }, [gameState.players]);
+
+    const getPeerConfig = (id?: string) => {
+      if (!PEER_SERVER_HOST) {
+          console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
+          if (id) return new Peer(id);
+          return new Peer();
+      }
+
+      const peerConfig = {
+          host: PEER_SERVER_HOST,
+          path: '/peerjs',
+          secure: true,
+          config: {
+              'iceServers': [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' },
+              ]
+          }
+      };
+      
+      if (id) return new Peer(id, peerConfig);
+      return new Peer(peerConfig);
+    };
+
+    const initializePeer = () => {
+        const peer = getPeerConfig();
+        peerRef.current = peer;
+
+        peer.on('open', (peerId) => {
+            setHostId(peerId);
+            setIsHost(true);
+            dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: [playerName] } });
+            setView('game');
+        });
+
+        peer.on('connection', (conn) => {
+            connectionsRef.current[conn.peer] = conn;
+            conn.on('data', (data: any) => {
+                const message = data as PeerMessage;
+                if (isHost) {
+                    if (message.type === 'JOIN_REQUEST') {
+                        if (gameState.players.length < MAX_PLAYERS) {
+                            dispatch({ type: 'ADD_PLAYER', payload: { playerName: message.payload.name } });
+                            addToast(`${message.payload.name} se ha unido.`, 'success');
+                        } else {
+                            console.log("Juego lleno, rechazando jugador.");
+                        }
+                    } else if (message.type === 'HOST_ACTION_REQUEST') {
+                        handleClientRequest(message.payload);
+                    }
+                }
+            });
+             conn.on('close', () => {
+                delete connectionsRef.current[conn.peer];
+            });
+        });
+
+        peer.on('error', (err) => {
+            setError(`Error de conexión: ${err.message}. Intenta de nuevo.`);
+            setView('home');
+        });
+    };
+
+    const createGame = () => {
+        if (!playerName) {
+            setError('Por favor, introduce tu nombre.');
+            return;
+        }
+        setError(null);
+        initializePeer();
+    };
+
+    const joinGame = (idToJoin?: string) => {
+        if (!playerName) { setError('Por favor, introduce tu nombre.'); return; }
+        const finalHostId = idToJoin || hostId;
+        if (!finalHostId) { setError('Por favor, introduce o escanea el ID de la partida.'); return; }
+        
+        setError(null);
+        const peer = getPeerConfig(); // Guests don't need a specific ID
+        peerRef.current = peer;
+
+        peer.on('open', () => {
+            if (!finalHostId) {
+                setError(`No se pudo conectar al ID. Verifica que sea correcto.`);
+                setView('home');
+                return;
+            }
+            const conn = peer.connect(finalHostId);
+            if (!conn) {
+                setError(`No se pudo conectar al ID: ${finalHostId}. Verifica que sea correcto.`);
+                setView('home');
+                return;
+            }
+            connectionsRef.current[finalHostId] = conn;
+            conn.on('open', () => conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } }));
+            conn.on('data', (data: any) => {
+                const message = data as PeerMessage;
+                if (message.type === 'STATE_UPDATE') {
+                    dispatch({ type: 'SET_STATE', payload: message.payload });
+                    if(!['game', 'board'].includes(view)) setView('game');
+                } else if (message.type === 'ACTION_RESPONSE') {
+                    if (message.payload.requesterId === myPlayerId) {
+                        addToast(message.payload.message, message.payload.success ? 'success' : 'error');
+                    }
+                }
+            });
+        });
+         peer.on('error', (err) => { setError(`Error al unirse: ${err.message}. Verifica el ID.`); setView('home'); });
+    };
+
+    const handleScanSuccess = (result: string | null) => {
+        if (result) {
+            setHostId(result); // Update the input field visually
+            setScannerOpen(false); // Close scanner
+            if (!playerName) {
+                addToast("Por favor, introduce tu nombre primero.", "error");
+                return;
+            }
+            // Use the scanned result directly to join
+            joinGame(result);
+        }
+    };
+    
+    const enterDevMode = () => {
+        const devPlayers = ['Anfitrión (Dev)', 'Invitado 1 (Dev)', 'Invitado 2 (Dev)'];
+        dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: devPlayers } });
+        setIsHost(true);
+        setDevPlayerViewId('player-1');
+        setView('game');
+    };
+    
+    const sendRequestToHost = (action: GameAction) => {
+        if (!myPlayerId) {
+            addToast("Error: No se pudo identificar al jugador.", "error");
+            return;
+        }
+        const conn = connectionsRef.current[hostId];
+        if (conn) {
+            conn.send({type: 'HOST_ACTION_REQUEST', payload: { requesterId: myPlayerId, action }});
+        }
+    };
+    
+    const simulateRequestInDevMode = (action: GameAction) => {
+        handleClientRequest({ requesterId: devPlayerViewId!, action });
+    }
+
+    const handleApproveAction = (actionId: string) => {
+        const pending = pendingActions.find(p => p.id === actionId);
+        if (pending) {
+            dispatch(pending.action);
+            const payload = { requesterId: pending.requesterId, success: true, message: '¡Solicitud aprobada!' };
+            broadcastMessage({ type: 'ACTION_RESPONSE', payload });
+
+            if (devPlayerViewId && devPlayerViewId === pending.requesterId) {
+                addToast(payload.message, 'success');
+            }
+            
+            setPendingActions(prev => prev.filter(p => p.id !== actionId));
+        }
+    };
+
+    const handleDenyAction = (actionId: string) => {
+        const pending = pendingActions.find(p => p.id === actionId);
+        if (pending) {
+            const payload = { requesterId: pending.requesterId, success: false, message: 'Solicitud rechazada.' };
+            broadcastMessage({ type: 'ACTION_RESPONSE', payload });
+
+            if (devPlayerViewId && devPlayerViewId === pending.requesterId) {
+                addToast(payload.message, 'error');
+            }
+
+            setPendingActions(prev => prev.filter(p => p.id !== actionId));
+        }
+    };
+
+    const propertiesData = useMemo(() => BOARD_SQUARES.reduce((acc, p) => { acc[p.id] = p; return acc; }, {} as Record<string, Property>), []);
+    const selectedProperty = useMemo(() => {
+        if (!selectedPropertyId) return null;
+        return propertiesData[selectedPropertyId];
+    }, [selectedPropertyId, propertiesData]);
+
+
+    const renderView = () => {
+        const myPlayer = gameState.players.find(p => p.id === myPlayerId);
+        
+        let playerRequestAction;
+        if(devPlayerViewId) {
+            playerRequestAction = simulateRequestInDevMode;
+        } else if (!isHost) {
+            playerRequestAction = sendRequestToHost;
+        }
+
+        switch (view) {
+            case 'game':
+                return <GameScreen 
+                    gameState={gameState} 
+                    myPlayer={myPlayer} 
+                    isHost={isHost}
+                    onPlayerRequestAction={playerRequestAction}
+                    onHostDirectAction={dispatch}
+                    pendingActions={pendingActions}
+                    onApprove={handleApproveAction}
+                    onDeny={handleDenyAction}
+                    devPlayerViewId={devPlayerViewId}
+                    onSetDevPlayerViewId={setDevPlayerViewId}
+                    onNavigateToBoard={() => setView('board')}
+                    setSelectedPropertyId={setSelectedPropertyId}
+                    onOpenShareModal={() => setShareModalOpen(true)}
+                    />;
+            case 'board':
+                 return <BoardScreen 
+                    gameState={gameState} 
+                    onNavigateToGame={() => setView('game')} 
+                    setSelectedPropertyId={setSelectedPropertyId}
+                    propertiesData={propertiesData}
+                />;
+            case 'home':
+            default:
+                return <HomeScreen 
+                    playerName={playerName} 
+                    onPlayerNameChange={setPlayerName}
+                    hostId={hostId}
+                    onHostIdChange={setHostId}
+                    onCreateGame={createGame}
+                    onJoinGame={() => joinGame()}
+                    onDevMode={enterDevMode}
+                    error={error}
+                    serverStatus={serverStatus}
+                    onRetry={checkServerStatus}
+                    onOpenScanner={() => setScannerOpen(true)}
+                />;
+        }
+    };
+
+    const myPlayerForModal = gameState.players.find(p => p.id === myPlayerId);
+    let playerRequestActionForModal;
+    if (devPlayerViewId) {
+        playerRequestActionForModal = simulateRequestInDevMode;
+    } else if (!isHost) {
+        playerRequestActionForModal = sendRequestToHost;
+    }
+
+    return (
+        <div className="min-h-screen bg-slate-900 text-white container mx-auto p-2 sm:p-4 flex flex-col items-center justify-center">
+            <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+            {renderView()}
+            {selectedProperty && myPlayerForModal && (
+                <PropertyDetailModal 
+                    isOpen={!!selectedPropertyId} 
+                    onClose={() => setSelectedPropertyId(null)} 
+                    property={selectedProperty} 
+                    myPlayer={myPlayerForModal} 
+                    gameState={gameState} 
+                    onPlayerRequestAction={playerRequestActionForModal}
+                    propertiesData={propertiesData} 
+                    addToast={addToast} 
+                />
+            )}
+            <ShareModal isOpen={isShareModalOpen} onClose={() => setShareModalOpen(false)} hostId={hostId} />
+            <QRScannerModal isOpen={isScannerOpen} onClose={() => setScannerOpen(false)} onScanSuccess={handleScanSuccess} />
+        </div>
     );
 };
 

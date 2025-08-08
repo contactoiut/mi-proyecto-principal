@@ -1,6 +1,8 @@
 {
+  "requestFramePermissions": [
+    "camera"
+  ],
   "name": "Bancomatón2",
-  "description": "Una aplicación web progresiva para gestionar el dinero, las propiedades y los edificios en juegos de mesa de estilo monopolio, eliminando la necesidad de componentes físicos. Los jugadores se conectan a través de la red local para una experiencia de juego compartida.",
-  "requestFramePermissions": [],
+  "description": "",
   "prompt": ""
 }

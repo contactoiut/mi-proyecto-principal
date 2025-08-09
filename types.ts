@@ -16,6 +16,7 @@ export interface Player {
   money: number;
   properties: string[]; // Array of property IDs
   buildings: Record<string, number>; // propertyId: houseCount (5 = hotel)
+  status: 'connected' | 'disconnected';
 }
 
 export interface HistoryEntry {
@@ -40,7 +41,9 @@ export type GameAction =
   | { type: 'BUILD_HOUSE'; payload: { playerId: string; propertyId: string; cost: number } }
   | { type: 'PASS_GO'; payload: { playerId: string } }
   | { type: 'MORTGAGE_PROPERTY'; payload: { playerId: string; propertyId: string } }
-  | { type: 'UNMORTGAGE_PROPERTY'; payload: { playerId: string; propertyId: string } };
+  | { type: 'UNMORTGAGE_PROPERTY'; payload: { playerId: string; propertyId: string } }
+  | { type: 'PLAYER_DISCONNECTED'; payload: { playerId: string } }
+  | { type: 'RECONNECT_PLAYER'; payload: { playerId: string } };
 
 export interface PendingAction {
     id: string;
@@ -53,6 +56,6 @@ export interface PendingAction {
 export type View = 'home' | 'game' | 'board';
 
 export interface PeerMessage {
-    type: 'JOIN_REQUEST' | 'STATE_UPDATE' | 'HOST_ACTION_REQUEST' | 'ACTION_RESPONSE';
+    type: 'JOIN_REQUEST' | 'STATE_UPDATE' | 'HOST_ACTION_REQUEST' | 'ACTION_RESPONSE' | 'PLAYER_DISCONNECTED';
     payload: any;
 }

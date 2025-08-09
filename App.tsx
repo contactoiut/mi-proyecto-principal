@@ -62,47 +62,39 @@ const getTextColorForBg = (hexColor?: string): 'black' | 'white' => {
     return (yiq >= 128) ? 'black' : 'white';
 };
 
-// --- CONFIGURACIÓN DEL SERVIDOR DE SEÑALIZACIÓN ---
-// URL del servidor de señalización en Render.
-// ¡IMPORTANTE! No incluyas "https://". Solo el dominio.
-const PEER_SERVER_HOST = 'mi-servidor-de-senales-render.onrender.com';
+// --- CONFIGURACIÓN ---
+const PEER_SERVER_HOST = 'bancomaton-server.onrender.com';
+const LOCAL_STORAGE_KEY = 'bancomaton_saved_game';
 
-type ServerStatus = 'checking' | 'online' | 'offline' | 'local';
+type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 
-// --- Helper Components (Extracted to fix Rules of Hooks violation) ---
+// --- Helper Components ---
 
-const ServerStatusIndicator = ({ serverStatus, error, onRetry }: { serverStatus: ServerStatus, error: string | null, onRetry: () => void }) => {
-    switch (serverStatus) {
-        case 'checking':
+const ServerStatusIndicator = ({ status, error, onRetry }: { status: ConnectionStatus, error: string | null, onRetry: () => void }) => {
+    switch (status) {
+        case 'connecting':
             return (
                 <div className="flex items-center justify-center gap-2 text-slate-400 p-3 rounded-md bg-slate-800/50">
                     <SpinnerIcon className="w-5 h-5" />
                     <span>Conectando al servidor...</span>
                 </div>
             );
-        case 'online':
+        case 'connected':
              return (
                 <div className="flex items-center justify-center gap-2 text-green-300 p-3 rounded-md bg-green-500/20">
                     <CheckCircleIcon className="w-5 h-5" />
-                    <span>Servidor en línea</span>
+                    <span>Conectado a la red P2P</span>
                 </div>
             );
-        case 'offline':
+        case 'error':
             return (
                 <div className="text-center">
                      <div className="flex items-center justify-center gap-2 text-red-300 p-3 rounded-md bg-red-500/20 border border-red-400/50">
                         <XCircleIcon className="w-6 h-6 flex-shrink-0" />
-                        <span className="text-left">{error || 'Error de conexión con el servidor'}</span>
+                        <span className="text-left">{error || 'Error de conexión'}</span>
                     </div>
                     <button onClick={onRetry} className="mt-2 text-sm text-teal-400 hover:text-teal-300 font-semibold">Reintentar</button>
-                </div>
-            );
-        case 'local':
-             return (
-                <div className="flex items-center justify-center gap-2 text-sky-300 p-3 rounded-md bg-sky-500/20">
-                    <CheckCircleIcon className="w-5 h-5" />
-                    <span>Modo desarrollador local</span>
                 </div>
             );
         default:
@@ -185,9 +177,7 @@ const NetWorthIndicator = ({ gameState, propertiesData }: { gameState: GameState
 
 // --- View Components ---
 
-const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, error, serverStatus, onRetry, onOpenScanner, isJoining }: any) => {
-    
-    const isInteractive = serverStatus === 'online' || serverStatus === 'local';
+const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, onCreateGame, onJoinGame, onDevMode, onResumeGame, savedGameExists, error, connectionStatus, onOpenScanner, isJoining }: any) => {
     
     return (
     <Card className="w-full max-w-md">
@@ -195,10 +185,10 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
         <p className="text-slate-400 text-center mb-6">Tu banca digital para juegos de mesa</p>
         
         <div className="mb-4">
-            <ServerStatusIndicator serverStatus={serverStatus} error={error} onRetry={onRetry} />
+            <ServerStatusIndicator status={connectionStatus} error={error} onRetry={() => {}} />
         </div>
 
-        {error && (serverStatus === 'online' || serverStatus === 'offline') && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
+        {error && connectionStatus !== 'connecting' && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
 
         <div className="space-y-4">
             <input 
@@ -208,12 +198,23 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
                 placeholder="Tu nombre de jugador" 
                 className="w-full bg-slate-900 border border-slate-700 rounded-md px-4 py-2 focus:ring-2 focus:ring-teal-500 focus:outline-none"
             />
+
+            {savedGameExists && (
+                <button 
+                    onClick={onResumeGame} 
+                    disabled={isJoining}
+                    className="w-full bg-sky-600 hover:bg-sky-500 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
+                >
+                    Reanudar Partida Anterior
+                </button>
+            )}
+
             <button 
                 onClick={onCreateGame} 
-                disabled={!isInteractive || isJoining}
+                disabled={isJoining}
                 className="w-full bg-teal-600 hover:bg-teal-500 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
             >
-                Crear Partida
+                {savedGameExists ? 'Crear Partida Nueva' : 'Crear Partida'}
             </button>
             
             <div className="flex items-center space-x-2">
@@ -231,7 +232,7 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
                 />
                  <button 
                     onClick={onOpenScanner}
-                    disabled={!isInteractive || isJoining} 
+                    disabled={isJoining} 
                     className="bg-slate-700 hover:bg-slate-600 p-3 rounded-md font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed"
                     aria-label="Escanear código QR"
                 >
@@ -240,7 +241,7 @@ const HomeScreen = ({ playerName, onPlayerNameChange, hostId, onHostIdChange, on
             </div>
             <button 
                 onClick={onJoinGame}
-                disabled={!isInteractive || isJoining} 
+                disabled={isJoining} 
                 className="w-full bg-slate-700 hover:bg-slate-600 rounded-md py-3 font-bold transition-colors disabled:bg-slate-700 disabled:cursor-not-allowed flex items-center justify-center"
             >
                 {isJoining ? (
@@ -465,7 +466,7 @@ const GameScreen = ({ gameState, myPlayer, isHost, onPlayerRequestAction, onHost
                         <h3 className="text-xl font-bold mb-3 flex items-center gap-2"><PlayersIcon className="w-6 h-6" /> Jugadores</h3>
                         <ul className="space-y-2">
                             {gameState.players.map((p: Player, index: number) => (
-                                <li key={p.id} className="flex justify-between items-center bg-slate-700/50 p-2 rounded-md">
+                                <li key={p.id} className={`flex justify-between items-center bg-slate-700/50 p-2 rounded-md transition-opacity ${p.status === 'disconnected' ? 'opacity-40' : 'opacity-100'}`}>
                                     <div className="flex items-center gap-2">
                                         <div className="w-3 h-3 rounded-full" style={{backgroundColor: PLAYER_COLORS[index]}}></div>
                                         <span className="font-semibold">{p.name}{p.id === myPlayer.id && " (Tú)"}</span>
@@ -912,36 +913,63 @@ const App: React.FC = () => {
     const [view, setView] = useState<View>('home');
     const [playerName, setPlayerName] = useState('');
     const [isHost, setIsHost] = useState(false);
-    const [hostId, setHostId] = useState('');
+    const [myPeerId, setMyPeerId] = useState<string | null>(null);
+    const [hostId, setHostId] = useState(''); // ID of the host we are trying to connect to
     const [error, setError] = useState<string | null>(null);
     const [devPlayerViewId, setDevPlayerViewId] = useState<string | null>(null);
     const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
     const [toasts, setToasts] = useState<ToastData[]>([]);
     const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
-    const [serverStatus, setServerStatus] = useState<ServerStatus>(!PEER_SERVER_HOST ? 'local' : 'checking');
+    const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
     const [isScannerOpen, setScannerOpen] = useState(false);
     const [isShareModalOpen, setShareModalOpen] = useState(false);
     const [isJoining, setIsJoining] = useState(false);
+    const [savedGameExists, setSavedGameExists] = useState(false);
 
 
     const peerRef = useRef<Peer | null>(null);
     const connectionsRef = useRef<Record<string, DataConnection>>({});
-    const joinTimeoutRef = useRef<number | null>(null);
+    const playerPeerMapRef = useRef<Record<string, string>>({}); // Maps playerId to peerId
     const { gameState, dispatch } = useGameEngine();
     
-    const myPlayerId = useMemo(() => {
-        if (devPlayerViewId) return devPlayerViewId;
-        // For real games (host or client) find the player by name.
-        if (gameState.players && playerName) {
-            const player = gameState.players.find(p => p.name === playerName);
-            if (player) {
-                return player.id;
+    // --- Persistence ---
+    useEffect(() => {
+        try {
+            const savedGame = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (savedGame) {
+                setSavedGameExists(true);
+            }
+        } catch (e) {
+            console.error("Could not read from localStorage", e);
+        }
+    }, []);
+
+    useEffect(() => {
+        // Save game state whenever it changes for the host
+        if (isHost && gameState.players.length > 0) {
+            try {
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(gameState));
+                setSavedGameExists(true);
+            } catch (e) {
+                console.error("Could not save to localStorage", e);
             }
         }
-        // Fallback for the host before the game state is initialized.
-        if (isHost) return 'player-1';
+    }, [gameState, isHost]);
 
-        return null;
+
+    const myPlayerId = useMemo(() => {
+        if (devPlayerViewId) return devPlayerViewId;
+        if (gameState.players.length === 0) return null;
+        
+        if (isHost) {
+            const hostPlayer = gameState.players.find(p => p.name === playerName);
+            return hostPlayer ? hostPlayer.id : 'player-1';
+        }
+
+        // For clients, find by name
+        const player = gameState.players.find(p => p.name === playerName);
+        return player ? player.id : null;
+
     }, [devPlayerViewId, isHost, gameState.players, playerName]);
 
     const addToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
@@ -953,76 +981,22 @@ const App: React.FC = () => {
         setToasts(prev => prev.filter(toast => toast.id !== id));
     };
 
-    const broadcastMessage = useCallback((message: PeerMessage) => {
+    const broadcastMessage = useCallback((message: PeerMessage, excludePeerId?: string) => {
         Object.values(connectionsRef.current).forEach(conn => {
-            conn.send(message);
+            if (conn.open && conn.peer !== excludePeerId) {
+                conn.send(message);
+            }
         });
     }, []);
-
-    const checkServerStatus = useCallback(() => {
-        if (!PEER_SERVER_HOST) {
-            setServerStatus('local');
-            return;
-        }
-    
-        setServerStatus('checking');
-        setError(null);
-    
-        let tempPeer: Peer | null = null;
-        const timer = setTimeout(() => {
-            if (tempPeer) {
-                tempPeer.destroy();
-            }
-            setServerStatus('offline');
-            setError('El servidor no responde. Revisa la URL o inténtalo más tarde.');
-        }, 8000); // 8-second timeout
-    
-        try {
-            const peerConfig = {
-                host: PEER_SERVER_HOST,
-                path: '/peerjs',
-                secure: true,
-                config: { 'iceServers': [] } // Skip STUN for a faster check
-            };
-            const randomId = `bancomaton-check-${Math.random().toString(36).substring(2, 9)}`;
-            tempPeer = new Peer(randomId, peerConfig);
-    
-            tempPeer.on('open', () => {
-                clearTimeout(timer);
-                setServerStatus('online');
-                tempPeer?.destroy();
-            });
-    
-            tempPeer.on('error', (err) => {
-                clearTimeout(timer);
-                setServerStatus('offline');
-                if (err.type === 'peer-unavailable') {
-                    setError('El servidor de señalización no está disponible en la URL proporcionada.');
-                } else {
-                    setError(`Error de conexión: ${err.message}`);
-                }
-                tempPeer?.destroy();
-            });
-        } catch (e) {
-            clearTimeout(timer);
-            setServerStatus('offline');
-            setError('No se pudo inicializar el cliente de conexión.');
-        }
-    }, []);
-
-    useEffect(() => {
-        if (PEER_SERVER_HOST) {
-            checkServerStatus();
-        }
-    }, [checkServerStatus]);
     
     useEffect(() => {
+        // Broadcast state changes automatically from the host
         if(isHost && gameState.players.length > 0) {
             broadcastMessage({ type: 'STATE_UPDATE', payload: gameState });
         }
     }, [gameState, isHost, broadcastMessage]);
 
-    const handleClientRequest = useCallback((request: {requesterId: string, action: GameAction}) => {
+    const handleClientRequest = useCallback((request: {requesterId: string, action: GameAction, peerId: string }) => {
          const requester = gameState.players.find(p => p.id === request.requesterId);
          if (!requester) return;
 
@@ -1037,7 +1011,7 @@ const App: React.FC = () => {
                 const amount = payload.amount;
                 const absAmount = Math.abs(amount).toLocaleString();
 
-                if (payload.fromId.startsWith('player-') && payload.toId.startsWith('player-')) { // Player to Player
+                if (payload.fromId.startsWith('player-') && payload.toId.startsWith('player-')) { 
                      message = `${requester.name} solicita pagar $${absAmount} a ${toName}.`;
                 } else if (amount > 0) {
                     message = `${requester.name} solicita pagar $${absAmount} a ${toName}.`;
@@ -1057,7 +1031,7 @@ const App: React.FC = () => {
                 message = `${requester.name} solicita pagar la hipoteca de ${prop?.name}.`;
                 break;
             default:
-                return;
+                message = `${requester.name} solicita una acción.`;
          }
 
          const newAction: PendingAction = {
@@ -1070,179 +1044,232 @@ const App: React.FC = () => {
          setPendingActions(prev => [...prev, newAction]);
     }, [gameState.players]);
 
-    const getPeerConfig = (id?: string) => {
-      if (!PEER_SERVER_HOST) {
-          console.warn('Usando PeerJS sin servidor de señalización (modo local). Para jugar online, configura la URL del servidor.');
-          if (id) return new Peer(id);
-          return new Peer();
-      }
+    const cleanupNetwork = useCallback(() => {
+        if (peerRef.current) {
+            peerRef.current.destroy();
+            peerRef.current = null;
+        }
+        Object.values(connectionsRef.current).forEach(conn => conn.close());
+        connectionsRef.current = {};
+        playerPeerMapRef.current = {};
+        setConnectionStatus('disconnected');
+        setIsHost(false);
+        setMyPeerId(null);
+    }, []);
 
-      // Configuración robusta de ICE para mejorar la conectividad a través de NATs y firewalls.
-      const peerConfig = {
-          host: PEER_SERVER_HOST,
-          path: '/peerjs',
-          secure: true,
-          config: {
-              'iceServers': [
-                  { urls: 'stun:stun.l.google.com:19302' },
-                  { urls: 'stun:stun1.l.google.com:19302' },
-                  { urls: 'stun:stun.twilio.com:3478' },
-                  // Un servidor TURN público como fallback. Esencial para redes restrictivas.
-                  // OpenRelay proporciona un servicio gratuito para desarrollo.
-                  {
-                      urls: "turn:openrelay.turn.corevoip.net:5349",
-                      username: "user",
-                      credential: "password"
-                  }
-              ]
-          }
-      };
-      
-      if (id) return new Peer(id, peerConfig);
-      return new Peer(peerConfig);
-    };
 
-    const initializePeer = () => {
-        const peer = getPeerConfig();
-        peerRef.current = peer;
-
-        peer.on('open', (peerId) => {
-            setHostId(peerId);
-            setIsHost(true);
-            dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: [playerName] } });
-            setView('game');
-        });
-
-        peer.on('connection', (conn) => {
-            connectionsRef.current[conn.peer] = conn;
-            conn.on('data', (data: any) => {
-                const message = data as PeerMessage;
-                if (isHost) {
-                    if (message.type === 'JOIN_REQUEST') {
-                        if (gameState.players.length < MAX_PLAYERS) {
-                            dispatch({ type: 'ADD_PLAYER', payload: { playerName: message.payload.name } });
-                            addToast(`${message.payload.name} se ha unido.`, 'success');
-                        } else {
-                            console.log("Juego lleno, rechazando jugador.");
-                        }
-                    } else if (message.type === 'HOST_ACTION_REQUEST') {
-                        handleClientRequest(message.payload);
-                    }
-                }
-            });
-             conn.on('close', () => {
-                delete connectionsRef.current[conn.peer];
-            });
-        });
-
-        peer.on('error', (err) => {
-            setError(`Error de conexión: ${err.message}. Intenta de nuevo.`);
-            setView('home');
-        });
-    };
-
-    const createGame = () => {
+    const initializePeer = useCallback((gameSetup: () => void) => {
+        cleanupNetwork();
         if (!playerName) {
             setError('Por favor, introduce tu nombre.');
             return;
         }
         setError(null);
-        initializePeer();
+        setConnectionStatus('connecting');
+
+        try {
+            const peer = new Peer({
+                host: PEER_SERVER_HOST,
+                path: '/peerjs',
+                secure: true,
+            });
+            peerRef.current = peer;
+
+            peer.on('open', (id) => {
+                setMyPeerId(id);
+                setHostId(id); // For sharing
+                setIsHost(true);
+                setConnectionStatus('connected');
+                gameSetup();
+                setView('game');
+                addToast('Partida creada. ¡Comparte el ID para que se unan!', 'success');
+            });
+
+            peer.on('connection', (conn) => {
+                conn.on('open', () => {
+                    connectionsRef.current[conn.peer] = conn;
+                    
+                    conn.on('data', (data: any) => {
+                        const message = data as PeerMessage;
+                        if (message.type === 'JOIN_REQUEST') {
+                            const newPlayerName = message.payload.name;
+                            const existingPlayer = gameState.players.find(p => p.name === newPlayerName);
+
+                            if (existingPlayer && existingPlayer.status === 'disconnected') {
+                                playerPeerMapRef.current[existingPlayer.id] = conn.peer;
+                                dispatch({ type: 'RECONNECT_PLAYER', payload: { playerId: existingPlayer.id } });
+                                addToast(`${newPlayerName} se ha reconectado.`, 'success');
+                            } else if (gameState.players.length < MAX_PLAYERS) {
+                                const newPlayerId = `player-${gameState.players.length + 1}`;
+                                playerPeerMapRef.current[newPlayerId] = conn.peer;
+                                dispatch({ type: 'ADD_PLAYER', payload: { playerName: newPlayerName } });
+                                addToast(`${newPlayerName} se ha unido.`, 'success');
+                            } else {
+                                // Game is full, reject
+                                conn.send({ type: 'ACTION_RESPONSE', payload: { success: false, message: "La partida está llena." } });
+                            }
+                        } else if (message.type === 'HOST_ACTION_REQUEST' && message.payload.requesterId) {
+                            handleClientRequest({ ...message.payload, peerId: conn.peer });
+                        }
+                    });
+                     conn.on('close', () => {
+                        const disconnectedPlayerId = Object.keys(playerPeerMapRef.current).find(
+                            (pId) => playerPeerMapRef.current[pId] === conn.peer
+                        );
+                        if(disconnectedPlayerId) {
+                            dispatch({ type: 'PLAYER_DISCONNECTED', payload: { playerId: disconnectedPlayerId } });
+                            delete playerPeerMapRef.current[disconnectedPlayerId];
+                        }
+                        delete connectionsRef.current[conn.peer];
+                    });
+                });
+            });
+
+            peer.on('error', (err) => {
+                setError(`Error de red: ${err.message}. Intenta de nuevo.`);
+                setConnectionStatus('error');
+                cleanupNetwork();
+            });
+
+        } catch(e: any) {
+            setError(`Error al iniciar: ${e.message}`);
+            setConnectionStatus('error');
+            cleanupNetwork();
+        }
+
+    }, [playerName, cleanupNetwork, dispatch, gameState.players, handleClientRequest, addToast]);
+
+    const createGame = () => {
+        initializePeer(() => {
+            dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: [playerName] } });
+            localStorage.removeItem(LOCAL_STORAGE_KEY);
+            setSavedGameExists(false);
+        });
+    };
+    
+    const resumeGame = () => {
+        const savedGameString = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (!savedGameString) {
+            setError("No se encontró la partida guardada.");
+            return;
+        }
+        const savedGameState: GameState = JSON.parse(savedGameString);
+        
+        // Mark other players as disconnected
+        const hostPlayer = savedGameState.players.find(p => p.name === playerName);
+        if(!hostPlayer){
+            setError("Tu nombre no coincide con el anfitrión de la partida guardada.");
+            return;
+        }
+
+        const restoredState: GameState = {
+            ...savedGameState,
+            players: savedGameState.players.map(p => ({
+                ...p,
+                status: p.id === hostPlayer.id ? 'connected' : 'disconnected'
+            }))
+        };
+        
+        initializePeer(() => {
+            dispatch({ type: 'SET_STATE', payload: restoredState });
+        });
     };
 
     const joinGame = (idToJoin?: string) => {
+        cleanupNetwork();
         if (!playerName) { setError('Por favor, introduce tu nombre.'); return; }
         const finalHostId = idToJoin || hostId;
         if (!finalHostId) { setError('Por favor, introduce o escanea el ID de la partida.'); return; }
         
         setError(null);
         setIsJoining(true);
+        setConnectionStatus('connecting');
 
-        if (joinTimeoutRef.current) clearTimeout(joinTimeoutRef.current);
-        joinTimeoutRef.current = window.setTimeout(() => {
-            setError('Tiempo de espera agotado. No se pudo conectar a la partida. Verifica el ID y que el anfitrión esté esperando.');
+        const joinTimeout = setTimeout(() => {
+            setError('Tiempo de espera agotado. Verifica el ID y que el anfitrión esté esperando.');
             setIsJoining(false);
-            peerRef.current?.destroy();
+            setConnectionStatus('error');
+            cleanupNetwork();
         }, 15000);
 
-        const peer = getPeerConfig();
-        peerRef.current = peer;
-
-        peer.on('open', () => {
-            if (!finalHostId) {
-                setError(`No se pudo conectar al ID. Verifica que sea correcto.`);
-                setView('home');
-                setIsJoining(false);
-                clearTimeout(joinTimeoutRef.current!);
-                return;
-            }
-            console.log('Cliente PeerJS abierto. Intentando conectar a:', finalHostId);
-            const conn = peer.connect(finalHostId, { reliable: true });
-            if (!conn) {
-                setError(`No se pudo iniciar la conexión al ID: ${finalHostId}.`);
-                setView('home');
-                setIsJoining(false);
-                clearTimeout(joinTimeoutRef.current!);
-                return;
-            }
-
-            connectionsRef.current[finalHostId] = conn;
-
-            conn.on('open', () => {
-                 console.log('Conexión DataConnection abierta con el anfitrión. Enviando solicitud de unión.');
-                 conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } });
+        try {
+            const peer = new Peer({
+                host: PEER_SERVER_HOST,
+                path: '/peerjs',
+                secure: true,
             });
-            
-            conn.on('data', (data: any) => {
-                const message = data as PeerMessage;
-                if (message.type === 'STATE_UPDATE') {
-                    clearTimeout(joinTimeoutRef.current!);
-                    dispatch({ type: 'SET_STATE', payload: message.payload });
-                    if(!['game', 'board'].includes(view)) setView('game');
-                    setIsJoining(false);
-                } else if (message.type === 'ACTION_RESPONSE') {
-                    if (message.payload.requesterId === myPlayerId) {
-                        addToast(message.payload.message, message.payload.success ? 'success' : 'error');
-                    }
+            peerRef.current = peer;
+
+            peer.on('open', (id) => {
+                setMyPeerId(id);
+                const conn = peer.connect(finalHostId, { reliable: true });
+
+                conn.on('open', () => {
+                    connectionsRef.current[finalHostId] = conn;
+                    conn.send({ type: 'JOIN_REQUEST', payload: { name: playerName } });
+
+                    conn.on('data', (data: any) => {
+                        const message = data as PeerMessage;
+                        if (message.type === 'STATE_UPDATE') {
+                            clearTimeout(joinTimeout);
+                            if(connectionStatus !== 'connected') {
+                                addToast("¡Conectado a la partida!", 'success');
+                            }
+                            setConnectionStatus('connected');
+                            dispatch({ type: 'SET_STATE', payload: message.payload });
+                            if(!['game', 'board'].includes(view)) setView('game');
+                            setIsJoining(false);
+                        } else if (message.type === 'ACTION_RESPONSE') {
+                            if (message.payload.requesterId === myPlayerId || !message.payload.requesterId) {
+                                addToast(message.payload.message, message.payload.success ? 'success' : 'error');
+                            }
+                        }
+                    });
+
+                    conn.on('close', () => {
+                         setError('El anfitrión se ha desconectado. La partida ha terminado.');
+                         setView('home');
+                         cleanupNetwork();
+                    });
+                     conn.on('error', (err) => {
+                        setError(`Error de conexión: ${err.message}`);
+                        setConnectionStatus('error');
+                        cleanupNetwork();
+                    });
+                });
+            });
+
+             peer.on('error', (err) => {
+                clearTimeout(joinTimeout);
+                let userMessage = `Error de red: ${err.message}.`;
+                if (err.type === 'peer-unavailable') {
+                    userMessage = 'No se encontró la partida con ese ID. Verifica que sea correcto.';
                 }
-            });
-
-            conn.on('error', (err) => {
-                console.error('Error en DataConnection:', err);
-                setError(`Error en la conexión: ${err.message}`);
+                setError(userMessage);
+                setConnectionStatus('error');
                 setIsJoining(false);
-                clearTimeout(joinTimeoutRef.current!);
-            });
-        });
-
-         peer.on('error', (err) => {
-            console.error('Error de PeerJS:', err, 'Type:', err.type);
-            let userMessage = `Error al unirse: ${err.message}.`;
-            if (err.type === 'peer-unavailable') {
-                userMessage = 'No se encontró la partida con ese ID. Por favor, verifica que es correcto y que el anfitrión te está esperando.';
-            } else if (err.type === 'network' || err.type === 'webrtc') {
-                userMessage = 'Error de red al intentar conectar. Revisa tu conexión a internet o posible firewall.';
-            }
-            setError(userMessage);
-            setView('home');
-            setIsJoining(false);
-            if (joinTimeoutRef.current) clearTimeout(joinTimeoutRef.current);
-         });
+                cleanupNetwork();
+             });
+        } catch(e: any) {
+             clearTimeout(joinTimeout);
+             setError(`Error al iniciar: ${e.message}`);
+             setConnectionStatus('error');
+             setIsJoining(false);
+             cleanupNetwork();
+        }
     };
 
     const handleScanSuccess = (result: string | null) => {
         if (result) {
             setHostId(result);
             setScannerOpen(false);
-            if (!playerName) {
-                addToast("Por favor, introduce tu nombre primero.", "error");
-                return;
-            }
+            addToast("Código QR escaneado. Uniéndose a la partida...", "success");
             joinGame(result);
         }
     };
     
     const enterDevMode = () => {
+        cleanupNetwork();
         const devPlayers = ['Anfitrión (Dev)', 'Invitado 1 (Dev)', 'Invitado 2 (Dev)'];
         dispatch({ type: 'INITIALIZE_GAME', payload: { playerNames: devPlayers } });
         setIsHost(true);
@@ -1255,14 +1282,18 @@ const App: React.FC = () => {
             addToast("Error: No se pudo identificar al jugador.", "error");
             return;
         }
-        const conn = connectionsRef.current[hostId];
-        if (conn) {
+        const conn = Object.values(connectionsRef.current)[0];
+        if (conn && conn.open) {
             conn.send({type: 'HOST_ACTION_REQUEST', payload: { requesterId: myPlayerId, action }});
+            addToast("Solicitud enviada al anfitrión.", "success");
+        } else {
+             addToast("No se pudo enviar la solicitud. Sin conexión con el anfitrión.", "error");
         }
     };
     
     const simulateRequestInDevMode = (action: GameAction) => {
-        handleClientRequest({ requesterId: devPlayerViewId!, action });
+        if(!devPlayerViewId) return;
+        handleClientRequest({ requesterId: devPlayerViewId, action, peerId: 'dev-peer' });
     }
 
     const handleApproveAction = (actionId: string) => {
@@ -1270,7 +1301,12 @@ const App: React.FC = () => {
         if (pending) {
             dispatch(pending.action);
             const payload = { requesterId: pending.requesterId, success: true, message: '¡Solicitud aprobada!' };
-            broadcastMessage({ type: 'ACTION_RESPONSE', payload });
+            
+            const targetPeerId = playerPeerMapRef.current[pending.requesterId];
+            const targetConn = connectionsRef.current[targetPeerId];
+            if(targetConn && targetConn.open) {
+                targetConn.send({ type: 'ACTION_RESPONSE', payload });
+            }
 
             if (devPlayerViewId && devPlayerViewId === pending.requesterId) {
                 addToast(payload.message, 'success');
@@ -1284,7 +1320,12 @@ const App: React.FC = () => {
         const pending = pendingActions.find(p => p.id === actionId);
         if (pending) {
             const payload = { requesterId: pending.requesterId, success: false, message: 'Solicitud rechazada.' };
-            broadcastMessage({ type: 'ACTION_RESPONSE', payload });
+            
+            const targetPeerId = playerPeerMapRef.current[pending.requesterId];
+            const targetConn = connectionsRef.current[targetPeerId];
+             if(targetConn && targetConn.open) {
+                targetConn.send({ type: 'ACTION_RESPONSE', payload });
+            }
 
             if (devPlayerViewId && devPlayerViewId === pending.requesterId) {
                 addToast(payload.message, 'error');
@@ -1302,7 +1343,16 @@ const App: React.FC = () => {
 
 
     const renderView = () => {
-        const myPlayer = gameState.players.find(p => p.id === myPlayerId);
+        // En modo dev, el estado es el del reducer. En modo cliente, es el mismo estado (actualizado por red).
+        const currentGameState = (gameState.players.length > 0) ? gameState : null;
+        if (!currentGameState && view !== 'home') {
+            // Si no hay estado de juego pero no estamos en home, algo anda mal, volvemos a home.
+            // Esto evita crashes si el estado se pierde.
+            setView('home');
+            return <HomeScreen />;
+        }
+        
+        const myPlayer = currentGameState ? currentGameState.players.find(p => p.id === myPlayerId) : null;
         
         let playerRequestAction;
         if(devPlayerViewId) {
@@ -1314,7 +1364,7 @@ const App: React.FC = () => {
         switch (view) {
             case 'game':
                 return <GameScreen 
-                    gameState={gameState} 
+                    gameState={currentGameState} 
                     myPlayer={myPlayer} 
                     isHost={isHost}
                     onPlayerRequestAction={playerRequestAction}
@@ -1330,7 +1380,7 @@ const App: React.FC = () => {
                     />;
             case 'board':
                  return <BoardScreen 
-                    gameState={gameState} 
+                    gameState={currentGameState!}
                     onNavigateToGame={() => setView('game')} 
                     setSelectedPropertyId={setSelectedPropertyId}
                     propertiesData={propertiesData}
@@ -1345,9 +1395,10 @@ const App: React.FC = () => {
                     onCreateGame={createGame}
                     onJoinGame={() => joinGame()}
                     onDevMode={enterDevMode}
+                    onResumeGame={resumeGame}
+                    savedGameExists={savedGameExists}
                     error={error}
-                    serverStatus={serverStatus}
-                    onRetry={checkServerStatus}
+                    connectionStatus={connectionStatus}
                     onOpenScanner={() => setScannerOpen(true)}
                     isJoining={isJoining}
                 />;
@@ -1378,7 +1429,7 @@ const App: React.FC = () => {
                     addToast={addToast} 
                 />
             )}
-            <ShareModal isOpen={isShareModalOpen} onClose={() => setShareModalOpen(false)} hostId={hostId} />
+            <ShareModal isOpen={isShareModalOpen} onClose={() => setShareModalOpen(false)} hostId={myPeerId || hostId} />
             <QRScannerModal isOpen={isScannerOpen} onClose={() => setScannerOpen(false)} onScanSuccess={handleScanSuccess} />
         </div>
     );

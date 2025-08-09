@@ -25,7 +25,8 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         name,
         money: INITIAL_MONEY,
         properties: [],
-        buildings: {}
+        buildings: {},
+        status: 'connected',
       }));
       const properties = PROPERTIES.reduce((acc, prop) => {
         acc[prop.id] = { ownerId: null, mortgaged: false };
@@ -51,6 +52,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
             money: INITIAL_MONEY,
             properties: [],
             buildings: {},
+            status: 'connected',
         };
         const message = `${playerName} se ha unido a la partida.`;
         return {
@@ -187,6 +189,28 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         const message = `${player.name} pagó la hipoteca de ${propertyData.name} por $${unmortgageCost.toLocaleString()}.`;
 
         return { ...state, players, properties, history: [...state.history, createHistoryEntry(message)] };
+    }
+    case 'PLAYER_DISCONNECTED': {
+        const { playerId } = action.payload;
+        const player = state.players.find(p => p.id === playerId);
+        if (!player) return state;
+        const message = `${player.name} se ha desconectado.`;
+        return {
+            ...state,
+            players: state.players.map(p => p.id === playerId ? { ...p, status: 'disconnected' } : p),
+            history: [...state.history, createHistoryEntry(message)] 
+        };
+    }
+    case 'RECONNECT_PLAYER': {
+         const { playerId } = action.payload;
+         const player = state.players.find(p => p.id === playerId);
+         if (!player) return state;
+         const message = `${player.name} se ha reconectado.`;
+         return {
+            ...state,
+            players: state.players.map(p => p.id === playerId ? { ...p, status: 'connected' } : p),
+            history: [...state.history, createHistoryEntry(message)] 
+         };
     }
     default:
       return state;
